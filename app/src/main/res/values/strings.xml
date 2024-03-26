@@ -1,0 +1,42 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <string name="app_name">Transcribro</string>
+    <string name="settings">Settings</string>
+    <string name="back_button">Back</string>
+    <string name="welcome">Welcome to Transcribro!</string>
+    <string name="view_source_code_setting_name">Source code</string>
+    <string name="view_source_code_setting_description">View Transcribro\'s source code on the GitHub website in your web browser</string>
+    <string name="privacy_policy_setting_name">Privacy policy</string>
+    <string name="privacy_policy_setting_description">View Transcribro\'s privacy policy in app</string>
+    <string name="license">License</string>
+    <string name="privacy_policy">Privacy policy</string>
+    <string name="license_setting_name">Transcribro\'s License</string>
+    <string name="license_setting_description">View Transcribro\'s License in app</string>
+    <string name="credits">Credits</string>
+    <string name="credits_setting_name">Credits</string>
+    <string name="credits_setting_description">View open source licenses of code that Transcribro uses in app</string>
+    <string name="pitch_black_background_setting_name">Pitch black background</string>
+    <string name="pitch_black_background_setting_description">Replaces background with pitch black background when dark theme is on</string>
+    <string name="about_setting_category">About</string>
+    <string name="theme">Theme</string>
+    <string name="open_transcribro_website_setting_name">Transcribro\'s Website</string>
+    <string name="open_transcribro_website_setting_description">Open Transcribro\'s website in your web browser</string>
+    <string name="review_privacy_policy_and_license" translatable="false">Review Transcribro\'s privacy policy and license (scroll down)</string>
+    <string name="full_privacy_policy" translatable="false">Transcribro privacy policy\n\nTranscribro is a private and on-device speech to text app.\n\nTranscribro requires access to your microphone to work.\n\nTranscribro uses your microphone to try to transcribe speech to text. Transcriptions may be inaccurate and can be quite wrong in some circumstances. Please ensure they are accurate before using them.\n\nTranscribro will not send the raw microphone data (not the transcriptions, just the audio from the microphone) anywhere, it will stay on your device and will only be kept long enough to transcribe it to text and assist with that task.\n\nTranscriptions may be sent to other apps if other apps use Transcribro to transcribe audio (those apps will require the microphone permission to use Transcribro to transcribe audio from the microphone in real-time) or when using the Transcribro Voice Input keyboard (expanded on below), but otherwise will not be sent anywhere else and will stay on your device.\n\nWhen using the Transcribro Voice Input keyboard, audio from the microphone will be transcribed and pasted into the currently active text box. This means the app you are on will see the transcriptions Transcribro pastes into its text box, just like using a keyboard to manually type out what you want to say.\n\nPlease follow applicable laws about recording and transcribe responsibly.\n        \nTranscribro has links to websites which are not under our control. We are not responsible for the content of linked sites. If you have any questions about policies of linked sites, please refer to them.\n\nFor any questions regarding Transcribro\'s privacy policy and practices, please contact us at the following email: transcribroprivacyinquiries@gmail.com\n\nTranscribro\'s privacy policy may be updated from time to time. When it does, you will be prompted to accept the new policy upon opening the app.\n\nPrivacy policy last updated date:\nYear: 2024,\nMonth: 3,\nDay: 25.</string>
+    <string name="full_license" translatable="false">ISC License\n\nCopyright (c) 2024 soupslurpr\n\nPermission to
+        use, copy, modify, and/or distribute this software for any\npurpose with or without fee is hereby granted, provided that the above\ncopyright notice and this permission notice appear in all copies.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH\nREGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY\nAND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,\nINDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM\nLOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR\nOTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR\nPERFORMANCE OF THIS SOFTWARE.</string>
+    <string name="privacy_policy_and_license_checkbox_text" translatable="false">By checking the checkbox and continuing, you agree to Transcribro\'s privacy policy and license, which are shown above.</string>
+    <string name="continue_to_app" translatable="false">Continue</string>
+    <string name="cancel" tools:ignore="MissingTranslation">Cancel</string>
+    <string name="confirm_" tools:ignore="MissingTranslation">Confirm</string>
+    <string name="donate">Donate</string>
+    <string name="transcribro_voice_input">Transcribro Voice Input</string>
+    <string name="start">Start</string>
+    <string name="auto_switch_to_previous_input_method_setting_name">Auto-Switch To Previous Input Method</string>
+    <string name="voice_input_keyboard_setting_category">Voice Input Keyboard</string>
+    <string name="auto_switch_to_previous_input_method_setting_description">Automatically switch to the previous
+        input method when finished recognizing</string>
+    <string name="auto_stop_recognition_setting_name">Auto-Stop Recognition</string>
+    <string name="auto_stop_recognition_setting_description">Automatically stop recognition when speech stops being detected</string>
+    <string name="auto_start_recognition_setting_name">Auto-Start Recognition</string>
+    <string name="auto_start_recognition_setting_description">Automatically start recognition when switching from another input method</string>
+</resources>
