@@ -1,14 +1,12 @@
 # Transcribro
 
 Transcribro is a private and on-device speech to text app.\
-It uses whisper.cpp to run the OpenAI Whisper family of models.\
+It uses whisper.cpp to run the OpenAI Whisper family of models and Silero VAD for voice activity detection.\
 It features a voice input keyboard, enabling you to type with speech.\
 It can also be used by other apps either explicitly or when set as the user-selected speech to text app which some apps
 may use for speech to text.
 
 ## Download
-
-Transcribro is currently only on GitHub releases.
 
 [//]: # (Transcribro is available on the [Accrescent]&#40;https://accrescent.app&#41; app store and GitHub releases.\)
 
@@ -25,20 +23,25 @@ than GitHub releases.\)
 
 [//]: # (                        </a>)
 
-The package name and SHA-256 hash of the signing certificate is below, so if you are downloading the APK, you can
-verify Transcribro with [`apksigner`](https://developer.android.com/studio/command-line/apksigner#usage-verify)
-using `apksigner verify --print-certs Transcribro-X.Y.Z.apk` and/or
-[AppVerifier](https://github.com/soupslurpr/AppVerifier).\
+[//]: # (The package name and SHA-256 hash of the signing certificate is below, so if you are downloading the APK, you can)
+
+[//]: # (verify Transcribro with [`apksigner`]&#40;https://developer.android.com/studio/command-line/apksigner#usage-verify&#41;)
+
+[//]: # (using `apksigner verify --print-certs Transcribro-X.Y.Z.apk` and/or)
+
+[//]: # ([AppVerifier]&#40;https://github.com/soupslurpr/AppVerifier&#41;.)
 
 [//]: # (If you are downloading from [Accrescent]&#40;https://accrescent.app&#41; then you should verify [Accrescent])
 
 [//]: # (&#40;https://accrescent.app&#41; itself [here]&#40;https://accrescent.app/faq#verifying&#41;.)
 
-dev.soupslurpr.transcribro\
-Haven't made key yet, please wait.
+[//]: # (dev.soupslurpr.transcribro\)
 
-It can also be found on a [Bluesky post](LINK HERE, CREATING KEY PLEASE WAIT!) to distrust the
-website. It is encouraged to verify it's the same with other people as well for assurance.
+[//]: # (Haven't made key yet, please wait.)
+
+[//]: # (It can also be found on a [Bluesky post]&#40;LINK HERE, CREATING KEY PLEASE WAIT!&#41; to distrust the)
+
+[//]: # (website. It is encouraged to verify it's the same with other people as well for assurance.)
 
 ## Community
 
