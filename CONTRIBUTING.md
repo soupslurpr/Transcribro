@@ -15,12 +15,17 @@ Transcribro currently depends on whisper.cpp to run the OpenAI Whisper models. Y
 to compile. There are plans to move to using Rust to run the models once a machine learning library that can run
 Whisper as fast as whisper.cpp is available.
 
-Transcribro has some Rust code that gets compiled into a library.
-The source code can be found at the transcribro_rs directory.
-Look at useful-commands.txt for useful commands and info that will probably help with building it.
+[//]: # (Transcribro has some Rust code that gets compiled into a library.)
 
-Java code is not accepted, we will only use Kotlin and Rust if needed. Unsafe Rust code should be avoided, but if
-there is truly no other way, it will be heavily scrutinized.
+[//]: # (The source code can be found at the transcribro_rs directory.)
+
+[//]: # (Look at useful-commands.txt for useful commands and info that will probably help with building it.)
+
+[//]: # ()
+
+[//]: # (Java code is not accepted, we will only use Kotlin and Rust if needed. Unsafe Rust code should be avoided, but if)
+
+[//]: # (there is truly no other way, it will be heavily scrutinized.)
 
 Views should be avoided, and only Jetpack Compose should be used unless there is no other way, but it
 has to be vital.
