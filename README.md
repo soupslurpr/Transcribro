@@ -1,6 +1,6 @@
 # Transcribro
 
-Transcribro is a private and on-device speech to text app.\
+Transcribro is a private and on-device speech recognition keyboard and service for Android.\
 It uses whisper.cpp to run the OpenAI Whisper family of models and Silero VAD for voice activity detection.\
 It features a voice input keyboard, enabling you to type with speech.\
 It can also be used by other apps either explicitly or when set as the user-selected speech to text app which some apps

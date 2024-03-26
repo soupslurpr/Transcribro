@@ -91,7 +91,7 @@ fun StartScreen() {
     val splashMessage = rememberSaveable {
         when (randomValue) {
             0 -> "Transcribruh" // 1 in 100 chance :D
-            else -> "A private and on-device speech to text app."
+            else -> "A private and on-device speech recognition keyboard and service."
         }
     }
 
