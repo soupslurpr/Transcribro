@@ -24,7 +24,6 @@ import dev.soupslurpr.transcribro.recognitionservice.whisper.WhisperRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -55,6 +54,8 @@ class MainRecognitionService : RecognitionService() {
     private var isSpeaking by mutableStateOf(false)
 
     private var stopListening by mutableStateOf(false)
+
+    private val transcribeJobs = mutableListOf<Job>()
 
     private val whisperRepository: WhisperRepository =
         WhisperRepository(
@@ -239,7 +240,7 @@ class MainRecognitionService : RecognitionService() {
             stopListening = false
 
             val audioRmsScope = CoroutineScope(Dispatchers.IO)
-            val transcribeJobs = mutableListOf<Job>()
+            transcribeJobs.clear()
             val transcriptions = mutableMapOf<Int, Transcription>()
             var transcriptionIndex = 0
 
@@ -445,10 +446,8 @@ class MainRecognitionService : RecognitionService() {
 
     override fun onCancel(listener: Callback?) {
         recordAndTranscribeJob?.cancel()
-        try {
-            transcribeScope.cancel()
-        } catch (e: IllegalStateException) {
-            // if there aren't any jobs, cool. We just want to cancel all of them if there are.
+        transcribeJobs.forEach {
+            it.cancel()
         }
         sileroVadRepository.reset()
     }
@@ -460,10 +459,8 @@ class MainRecognitionService : RecognitionService() {
     override fun onDestroy() {
         super.onDestroy()
         recordAndTranscribeJob?.cancel()
-        try {
-            transcribeScope.cancel()
-        } catch (e: IllegalStateException) {
-            // if there aren't any jobs, cool. We just want to cancel all of them if there are.
+        transcribeJobs.forEach {
+            it.cancel()
         }
         runBlocking {
             whisperRepository.release()
