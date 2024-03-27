@@ -23,16 +23,12 @@ class SileroVadRepository(
             (data[index] / 32767.0f).coerceIn(-1f..1f)
         }
 
-        var detectResult = sileroVadDetector.value?.apply(buffer, true)
-
-        if (detectResult?.isNotEmpty() == true) {
-            println(detectResult)
-        }
+        val detectResult = sileroVadDetector.value?.apply(buffer, true)
 
         return detectResult
     }
 
-    suspend fun release() {
+    fun release() {
         sileroVadDetector.value?.close()
     }
 
