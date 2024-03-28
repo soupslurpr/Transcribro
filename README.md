@@ -8,40 +8,28 @@ may use for speech to text.
 
 ## Download
 
-[//]: # (Transcribro is available on the [Accrescent]&#40;https://accrescent.app&#41; app store and GitHub releases.\)
+Transcribro is available on the [Accrescent](https://accrescent.app) app store and GitHub releases.\
+[Accrescent](https://accrescent.app) is the recommended way to get Transcribro as it is more secure
+than GitHub releases.\
+Click on the badge below to get it on [Accrescent](https://accrescent.app).
 
-[//]: # ([Accrescent]&#40;https://accrescent.app&#41; is the recommended way to get Transcribro as it is more secure
-than GitHub releases.\)
+<a href="https://accrescent.app/app/dev.soupslurpr.transcribro">
+    <img alt="Get it on Accrescent" src="https://accrescent.app/badges/get-it-on.png" height="80">
+</a>
 
-[//]: # (Click on the badge below to get it on [Accrescent]&#40;https://accrescent.app&#41;.)
+The package name and SHA-256 hash of the signing certificate is below, so if you are downloading the APK, you can
+verify Transcribro with [`apksigner`](https://developer.android.com/studio/command-line/apksigner#usage-verify)
+using `apksigner verify --print-certs Transcribro-X.Y.Z.apk` and/or
+[AppVerifier](https://github.com/soupslurpr/AppVerifier).
+If you are downloading from [Accrescent](https://accrescent.app) then you should verify
+[Accrescent](https://accrescent.app) itself [here](https://accrescent.app/faq#verifying).
 
-[//]: # ()
+dev.soupslurpr.transcribro\
+7D:BC:FB:FA:A1:35:B4:4E:6E:93:91:02:25:DC:B1:4E:05:82:91:DA:8C:2D:36:22:73:49:49:B7:1A:B3:BE:64
 
-[//]: # (<a href="https://accrescent.app/app/dev.soupslurpr.transcribro">)
-
-[//]: # (                            <img alt="Get it on Accrescent" src="https://accrescent.app/badges/get-it-on.png">)
-
-[//]: # (                        </a>)
-
-[//]: # (The package name and SHA-256 hash of the signing certificate is below, so if you are downloading the APK, you can)
-
-[//]: # (verify Transcribro with [`apksigner`]&#40;https://developer.android.com/studio/command-line/apksigner#usage-verify&#41;)
-
-[//]: # (using `apksigner verify --print-certs Transcribro-X.Y.Z.apk` and/or)
-
-[//]: # ([AppVerifier]&#40;https://github.com/soupslurpr/AppVerifier&#41;.)
-
-[//]: # (If you are downloading from [Accrescent]&#40;https://accrescent.app&#41; then you should verify [Accrescent])
-
-[//]: # (&#40;https://accrescent.app&#41; itself [here]&#40;https://accrescent.app/faq#verifying&#41;.)
-
-[//]: # (dev.soupslurpr.transcribro\)
-
-[//]: # (Haven't made key yet, please wait.)
-
-[//]: # (It can also be found on a [Bluesky post]&#40;LINK HERE, CREATING KEY PLEASE WAIT!&#41; to distrust the)
-
-[//]: # (website. It is encouraged to verify it's the same with other people as well for assurance.)
+It can also be found on a [Bluesky post](https://bsky.app/profile/soupslurpr.dev/post/3kopox4ffl72t)
+to distrust the website.
+It is encouraged to verify it's the same with other people as well for assurance.
 
 ## Community
 
