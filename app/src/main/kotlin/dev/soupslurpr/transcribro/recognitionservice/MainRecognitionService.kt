@@ -81,8 +81,7 @@ class MainRecognitionService : RecognitionService() {
                     val START_THRESHOLD = 0.6f
                     val END_THRESHOLD = 0.45f
                     val MIN_SILENCE_DURATION_MS = 3000
-                    val SPEECH_PAD_MS = 500
-                    val WINDOW_SIZE_SAMPLES = 2048
+                    val SPEECH_PAD_MS = 1500
 
                     val model =
                         this@MainRecognitionService.assets.open("models/silero_vad/silero_vad.with_runtime_opt.ort")
