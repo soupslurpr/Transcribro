@@ -23,7 +23,8 @@ class WhisperRepository(
         val buffer = FloatArray(data.size) { index ->
             (data[index] / 32767.0f).coerceIn(-1f..1f)
         }
-        return whisperContext.value?.transcribeData(buffer, ((data.size / 16000f) * 1000f).toLong()) ?: ""
+        val transcript = whisperContext.value?.transcribeData(buffer, ((data.size / 16000f) * 1000f).toLong()) ?: ""
+        return transcript.removeSuffix(" .") // remove hallucination
     }
 
     suspend fun release() {
