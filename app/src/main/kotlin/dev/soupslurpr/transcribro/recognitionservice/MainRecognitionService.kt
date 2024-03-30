@@ -11,6 +11,7 @@ import android.speech.RecognitionService
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.whispercpp.whisper.WhisperContext
@@ -244,6 +245,7 @@ class MainRecognitionService : RecognitionService() {
             var transcriptionIndex = 0
 
             val audioData: MutableList<Short> = mutableListOf()
+            var audioDataSurminus by mutableIntStateOf(0)
 
             listener?.readyForSpeech(Bundle())
 
@@ -301,7 +303,7 @@ class MainRecognitionService : RecognitionService() {
 
                                 val transcriptionText =
                                     whisperRepository.transcribeAudio(
-                                        audioData.slice(transcription.start!!.toInt()..transcription.end!!.toInt())
+                                        audioData.slice((transcription.start!!.toInt() - audioDataSurminus)..transcription.end!!.toInt())
                                             .toShortArray(),
                                     )
 
@@ -310,6 +312,14 @@ class MainRecognitionService : RecognitionService() {
                                 }
 
                                 transcription.text = transcriptionText
+
+                                totalTranscriptionTime += currentTimeMillis() - timeBeforeTranscription
+
+                                for (job in transcribeJobs.iterator().withIndex()) {
+                                    if ((job.index + 1) < transcriptionIndex) {
+                                        job.value.join()
+                                    }
+                                }
 
                                 if (recognizerIntent?.extras?.getBoolean(RecognizerIntent.EXTRA_PARTIAL_RESULTS) == true) {
                                     val bundle = Bundle().apply {
@@ -327,8 +337,6 @@ class MainRecognitionService : RecognitionService() {
 
                                     listener?.partialResults(bundle)
                                 }
-
-                                totalTranscriptionTime += currentTimeMillis() - timeBeforeTranscription
                             }
 
                             transcribeJobs.add(transcribeJob)
@@ -347,51 +355,68 @@ class MainRecognitionService : RecognitionService() {
                                     }
 
                                     "end" -> {
-                                        isSpeaking = false
-                                        listener?.endOfSpeech()
+                                        if (transcriptions[currentTranscriptionIndex]?.end == null) {
+                                            isSpeaking = false
+                                            listener?.endOfSpeech()
 
-                                        transcriptions[currentTranscriptionIndex]?.end = it.value
+                                            transcriptions[currentTranscriptionIndex]?.end = it.value
 
-                                        val transcribeJob = transcribeScope.launch {
-                                            val timeBeforeTranscription = currentTimeMillis()
+                                            val transcribeJob = transcribeScope.launch {
+                                                val timeBeforeTranscription = currentTimeMillis()
 
-                                            val transcription = transcriptions[currentTranscriptionIndex]!!
+                                                val transcription = transcriptions[currentTranscriptionIndex]!!
 
-                                            transcription.text =
-                                                whisperRepository.transcribeAudio(
-                                                    audioData.slice(transcription.start!!.toInt()..transcription.end!!.toInt())
-                                                        .toShortArray(),
-                                                )
-
-                                            if (recognizerIntent?.extras?.getBoolean(RecognizerIntent.EXTRA_PARTIAL_RESULTS) == true) {
-                                                val bundle = Bundle().apply {
-                                                    putStringArrayList(
-                                                        SpeechRecognizer.RESULTS_RECOGNITION,
-                                                        arrayListOf(
-                                                            transcription.text!!
-                                                        )
+                                                transcription.text =
+                                                    whisperRepository.transcribeAudio(
+                                                        audioData.slice((transcription.start!!.toInt() - audioDataSurminus)..(transcription.end!!.toInt() - audioDataSurminus))
+                                                            .toShortArray(),
                                                     )
+
+                                                totalTranscriptionTime += currentTimeMillis() - timeBeforeTranscription
+
+                                                for (job in transcribeJobs.iterator().withIndex()) {
+                                                    if ((job.index + 1) < currentTranscriptionIndex) {
+                                                        job.value.join()
+                                                    }
                                                 }
 
-                                                if (!isActive) {
-                                                    return@launch
-                                                }
+                                                audioData.subList(0, (transcription.end!!.toInt()) - audioDataSurminus)
+                                                    .clear()
+                                                audioDataSurminus += transcription.end!!.toInt() - audioDataSurminus
 
-                                                listener?.partialResults(bundle)
+                                                if (recognizerIntent?.extras?.getBoolean(RecognizerIntent.EXTRA_PARTIAL_RESULTS) == true) {
+                                                    val bundle = Bundle().apply {
+                                                        putStringArrayList(
+                                                            SpeechRecognizer.RESULTS_RECOGNITION,
+                                                            arrayListOf(
+                                                                transcription.text!!
+                                                            )
+                                                        )
+                                                    }
+
+                                                    if (!isActive) {
+                                                        return@launch
+                                                    }
+
+                                                    listener?.partialResults(bundle)
+                                                }
                                             }
 
-                                            totalTranscriptionTime += currentTimeMillis() - timeBeforeTranscription
-                                        }
+                                            transcribeJobs.add(transcribeJob)
 
-                                        transcribeJobs.add(transcribeJob)
+                                            transcribeJob.start() // start transcribing this segment right now
 
-                                        transcribeJob.start() // start transcribing this segment right now
-
-                                        if (autoStopRecognition) {
-                                            isRecording.set(false)
+                                            if (autoStopRecognition) {
+                                                isRecording.set(false)
+                                            }
                                         }
                                     }
                                 }
+                            }
+
+                            if (!isSpeaking && !autoStopRecognition && (currentTranscriptionIndex > 0) && (audioData.size > 480000) && (transcriptions[currentTranscriptionIndex]?.end != null)) {
+                                audioData.subList(0, 240000).clear()
+                                audioDataSurminus += 240000
                             }
                         }
                     }
