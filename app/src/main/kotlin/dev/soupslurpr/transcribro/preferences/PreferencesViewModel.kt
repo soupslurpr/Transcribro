@@ -73,6 +73,14 @@ class PreferencesViewModel(private val dataStore: DataStore<Preferences>) : View
                                 .first] ?: uiState.value
                                 .autoStartRecognition.second.value
                         )
+                    ),
+                    autoSendTranscription = Pair(
+                        uiState.value.autoSendTranscription.first,
+                        mutableStateOf(
+                            preferences[uiState.value.autoSendTranscription
+                                .first] ?: uiState.value
+                                .autoSendTranscription.second.value
+                        )
                     )
                 )
             }

@@ -114,6 +114,20 @@ fun SettingsStartScreen(
             )
         }
         item {
+            val preference = preferencesUiState.autoSendTranscription
+            SettingsSwitchItem(
+                name = stringResource(id = R.string.auto_send_transcription_setting_name),
+                description = stringResource(id = R.string.auto_send_transcription_setting_description),
+                checked = preference.second.value,
+                onCheckedChange = {
+                    preferencesViewModel.setPreference(
+                        preference.first,
+                        it
+                    )
+                }
+            )
+        }
+        item {
             SettingsCategory(
                 stringResource(R.string.about_setting_category)
             )

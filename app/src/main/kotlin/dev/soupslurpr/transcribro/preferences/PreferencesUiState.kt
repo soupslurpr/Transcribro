@@ -25,7 +25,7 @@ data class PreferencesUiState(
         mutableStateOf(false)
     ),
 
-    /** Whether to automatically stop recognition whenever speech stops getting detected. */
+    /** Whether to automatically stop recognition when speech stops being detected. */
     val autoStopRecognition: Pair<Preferences.Key<Boolean>, MutableState<Boolean>> = Pair(
         (booleanPreferencesKey("AUTO_STOP_RECOGNITION")),
         mutableStateOf(false)
@@ -36,4 +36,10 @@ data class PreferencesUiState(
         (booleanPreferencesKey("AUTO_START_RECOGNITION")),
         mutableStateOf(true)
     ),
+
+    /** Whether to automatically send transcription when speech stops being detected. */
+    val autoSendTranscription: Pair<Preferences.Key<Boolean>, MutableState<Boolean>> = Pair(
+        (booleanPreferencesKey("AUTO_SEND_TRANSCRIPTION")),
+        mutableStateOf(false)
+    )
 )

@@ -289,6 +289,10 @@ class VoiceInput : InputMethodService() {
                                                                 textToCommit,
                                                                 1
                                                             )
+
+                                                            if (preferencesUiState.autoSendTranscription.second.value) {
+                                                                ic.performEditorAction(EditorInfo.IME_ACTION_SEND)
+                                                            }
                                                         }
                                                     }
                                                 }
