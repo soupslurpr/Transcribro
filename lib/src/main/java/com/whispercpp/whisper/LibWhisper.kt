@@ -5,7 +5,6 @@ import android.os.Build
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.asCoroutineDispatcher
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.InputStream
@@ -50,12 +49,6 @@ class WhisperContext private constructor(private var ptr: Long) {
         if (ptr != 0L) {
             WhisperLib.freeContext(ptr)
             ptr = 0
-        }
-    }
-
-    protected fun finalize() {
-        runBlocking {
-            release()
         }
     }
 
