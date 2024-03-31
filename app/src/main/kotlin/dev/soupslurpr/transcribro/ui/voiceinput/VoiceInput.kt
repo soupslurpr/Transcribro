@@ -271,12 +271,22 @@ class VoiceInput : InputMethodService() {
                                                 override fun onPartialResults(partialResults: Bundle?) {
                                                     currentInputConnection.also { ic: InputConnection ->
                                                         if (partialResults != null) {
-                                                            val text = partialResults.getStringArrayList(
+                                                            val transcription = partialResults.getStringArrayList(
                                                                 SpeechRecognizer.RESULTS_RECOGNITION
                                                             )?.get(0) ?: ""
 
+                                                            val textToCommit = if ((ic.getTextBeforeCursor(
+                                                                    2,
+                                                                    0
+                                                                ) == "") || (ic.getTextBeforeCursor(1, 0) == "\n")
+                                                            ) {
+                                                                transcription.removePrefix(" ")
+                                                            } else {
+                                                                transcription
+                                                            }
+
                                                             ic.commitText(
-                                                                text,
+                                                                textToCommit,
                                                                 1
                                                             )
                                                         }
