@@ -31,13 +31,21 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowRightAlt
 import androidx.compose.material.icons.automirrored.outlined.Backspace
+import androidx.compose.material.icons.automirrored.outlined.KeyboardReturn
+import androidx.compose.material.icons.automirrored.outlined.NavigateBefore
+import androidx.compose.material.icons.automirrored.outlined.NavigateNext
 import androidx.compose.material.icons.automirrored.outlined.Redo
+import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.automirrored.outlined.Undo
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.outlined.Block
+import androidx.compose.material.icons.outlined.Done
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.MicOff
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilledIconToggleButton
 import androidx.compose.material3.FilledTonalButton
@@ -647,64 +655,170 @@ class VoiceInput : InputMethodService() {
                                                 }
                                             }
                                             Spacer(modifier = Modifier.size(8.dp))
-
-                                            val backspaceLongPressScope = rememberCoroutineScope()
-                                            var backspaceLongPressJob by remember { mutableStateOf<Job?>(null) }
-
-                                            FilledTonalIconButton(
-                                                onClick = {
-                                                    backspaceLongPressJob?.cancel()
-
-                                                    val selectedText =
-                                                        currentInputConnection.getSelectedText(0)
-                                                    if (selectedText.isNullOrEmpty()) {
-                                                        currentInputConnection.deleteSurroundingText(1, 0)
-                                                    } else {
-                                                        currentInputConnection.commitText("", 1)
-                                                    }
-                                                },
+                                            Column(
                                                 modifier = Modifier
                                                     .fillMaxHeight()
                                                     .fillMaxWidth()
                                                     .weight(1f)
-                                                    .pointerInteropFilter { motionEvent ->
-                                                        when (motionEvent.action) {
-                                                            MotionEvent.ACTION_DOWN -> {
-                                                                backspaceLongPressJob = backspaceLongPressScope.launch {
-                                                                    delay(500)
-                                                                    hapticFeedback.performHapticFeedback(
-                                                                        HapticFeedbackType.LongPress
-                                                                    )
-                                                                    while (isActive) {
-                                                                        val selectedText =
-                                                                            currentInputConnection.getSelectedText(0)
-                                                                        if (selectedText.isNullOrEmpty()) {
-                                                                            currentInputConnection.deleteSurroundingText(
-                                                                                1,
-                                                                                0
-                                                                            )
-                                                                        } else {
-                                                                            currentInputConnection.commitText("", 1)
-                                                                        }
+                                            ) {
+                                                val backspaceLongPressScope = rememberCoroutineScope()
+                                                var backspaceLongPressJob by remember { mutableStateOf<Job?>(null) }
 
-                                                                        delay(50)
-                                                                    }
+                                                FilledTonalIconButton(
+                                                    onClick = {
+                                                        backspaceLongPressJob?.cancel()
+
+                                                        val selectedText =
+                                                            currentInputConnection.getSelectedText(0)
+                                                        if (selectedText.isNullOrEmpty()) {
+                                                            currentInputConnection.deleteSurroundingText(1, 0)
+                                                        } else {
+                                                            currentInputConnection.commitText("", 1)
+                                                        }
+                                                    },
+                                                    modifier = Modifier
+                                                        .fillMaxHeight()
+                                                        .fillMaxWidth()
+                                                        .weight(1f)
+                                                        .pointerInteropFilter { motionEvent ->
+                                                            when (motionEvent.action) {
+                                                                MotionEvent.ACTION_DOWN -> {
+                                                                    backspaceLongPressJob =
+                                                                        backspaceLongPressScope.launch {
+                                                                            delay(500)
+                                                                            hapticFeedback.performHapticFeedback(
+                                                                                HapticFeedbackType.LongPress
+                                                                            )
+                                                                            while (isActive) {
+                                                                                val selectedText =
+                                                                                    currentInputConnection.getSelectedText(
+                                                                                        0
+                                                                                    )
+                                                                                if (selectedText.isNullOrEmpty()) {
+                                                                                    currentInputConnection.deleteSurroundingText(
+                                                                                        1,
+                                                                                        0
+                                                                                    )
+                                                                                } else {
+                                                                                    currentInputConnection.commitText(
+                                                                                        "",
+                                                                                        1
+                                                                                    )
+                                                                                }
+
+                                                                                delay(50)
+                                                                            }
+                                                                        }
+                                                                }
+
+                                                                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                                                                    backspaceLongPressJob?.cancel()
                                                                 }
                                                             }
+                                                            false
+                                                        },
+                                                    shape = RoundedCornerShape(10.dp)
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.AutoMirrored.Outlined.Backspace,
+                                                        contentDescription = "Backspace",
+                                                        modifier = Modifier.fillMaxSize(0.5f)
+                                                    )
+                                                }
 
-                                                            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                                                                backspaceLongPressJob?.cancel()
+                                                Spacer(modifier = Modifier.size(8.dp))
+
+                                                Row(
+                                                    modifier = Modifier
+                                                        .fillMaxHeight()
+                                                        .fillMaxWidth()
+                                                        .weight(1f),
+                                                ) {
+                                                    // TODO: why is the actionId seemingly always 0???
+                                                    val (actionKeyIcon, actionKeyContentDescription) = when (currentInputEditorInfo.actionId) {
+                                                        EditorInfo.IME_ACTION_NEXT -> Pair(
+                                                            Icons.AutoMirrored.Outlined.NavigateNext,
+                                                            "Next"
+                                                        )
+
+                                                        EditorInfo.IME_ACTION_GO -> Pair(
+                                                            Icons.AutoMirrored.Outlined.ArrowRightAlt,
+                                                            "Go"
+                                                        )
+
+                                                        EditorInfo.IME_ACTION_SEND -> Pair(
+                                                            Icons.AutoMirrored.Outlined.Send,
+                                                            "Send"
+                                                        )
+
+                                                        EditorInfo.IME_ACTION_DONE -> Pair(Icons.Outlined.Done, "Done")
+                                                        EditorInfo.IME_ACTION_NONE -> Pair(Icons.Outlined.Block, "None")
+                                                        EditorInfo.IME_ACTION_PREVIOUS -> Pair(
+                                                            Icons.AutoMirrored.Outlined.NavigateBefore,
+                                                            "Previous"
+                                                        )
+
+                                                        EditorInfo.IME_ACTION_SEARCH -> Pair(
+                                                            Icons.Outlined.Search,
+                                                            "Search"
+                                                        )
+
+                                                        else -> Pair(Icons.AutoMirrored.Outlined.Send, "Send")
+                                                    }
+
+                                                    FilledTonalIconButton(
+                                                        onClick = {
+                                                            if (actionKeyContentDescription == "Send") {
+                                                                currentInputConnection.performEditorAction(EditorInfo.IME_ACTION_SEND)
+                                                            } else {
+                                                                currentInputConnection.performEditorAction(
+                                                                    currentInputEditorInfo.actionId
+                                                                )
                                                             }
-                                                        }
-                                                        false
-                                                    },
-                                                shape = RoundedCornerShape(10.dp)
-                                            ) {
-                                                Icon(
-                                                    imageVector = Icons.AutoMirrored.Outlined.Backspace,
-                                                    contentDescription = "Backspace",
-                                                    modifier = Modifier.fillMaxSize(0.5f)
-                                                )
+                                                        },
+                                                        modifier = Modifier
+                                                            .fillMaxHeight()
+                                                            .fillMaxWidth()
+                                                            .weight(1f),
+                                                        shape = RoundedCornerShape(10.dp)
+                                                    ) {
+                                                        Icon(
+                                                            imageVector = actionKeyIcon,
+                                                            contentDescription = actionKeyContentDescription,
+                                                            modifier = Modifier.fillMaxSize(0.5f)
+                                                        )
+                                                    }
+
+                                                    Spacer(modifier = Modifier.size(8.dp))
+
+                                                    FilledTonalIconButton(
+                                                        onClick = {
+                                                            currentInputConnection.sendKeyEvent(
+                                                                KeyEvent(
+                                                                    KeyEvent.ACTION_DOWN,
+                                                                    KeyEvent.KEYCODE_ENTER
+                                                                )
+                                                            )
+                                                            currentInputConnection.sendKeyEvent(
+                                                                KeyEvent(
+                                                                    KeyEvent.ACTION_UP,
+                                                                    KeyEvent.KEYCODE_ENTER
+                                                                )
+                                                            )
+                                                        },
+                                                        modifier = Modifier
+                                                            .fillMaxHeight()
+                                                            .fillMaxWidth()
+                                                            .weight(1f),
+                                                        shape = RoundedCornerShape(10.dp)
+                                                    ) {
+                                                        Icon(
+                                                            imageVector = Icons.AutoMirrored.Outlined.KeyboardReturn,
+                                                            contentDescription = "Return",
+                                                            modifier = Modifier.fillMaxSize(0.5f)
+                                                        )
+                                                    }
+                                                }
                                             }
                                         }
                                     }
