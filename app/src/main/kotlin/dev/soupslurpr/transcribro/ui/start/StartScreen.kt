@@ -48,6 +48,7 @@ import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
 import dev.soupslurpr.transcribro.R
 import dev.soupslurpr.transcribro.ui.reusablecomposables.ScreenLazyColumn
+import java.time.LocalDateTime
 import kotlin.random.Random
 
 @OptIn(ExperimentalPermissionsApi::class)
@@ -87,11 +88,28 @@ fun StartScreen() {
         }
     }
 
-    val randomValue = Random.nextInt(0, 100)
+    val isAprilFools = ((LocalDateTime.now().monthValue == 4) && (LocalDateTime.now().dayOfMonth == 1))
+
+    val randomValue = Random.nextInt(0, 15)
     val splashMessage = rememberSaveable {
         when (randomValue) {
-            0 -> "Transcribruh" // 1 in 100 chance :D
-            else -> "A private and on-device speech recognition keyboard and service."
+            0 -> "Where every word counts, unless it's a typo."
+            1 -> "Always here to listen, even if it's just your fridge humming."
+            2 -> "Because your thoughts deserve to be transcribed, word for word."
+            3 -> "Talk nerdy to me. I'll translate it to text."
+            4 -> "Turning rambles into readable recaps with a tap."
+            5 -> "Whisper, sing, or discuss the theory of relativity, I've got you covered."
+            6 -> "Where 'I didn't catch that' simply doesn't exist."
+            7 -> "Speak of the devil, and I shall make him grammatically correct."
+            8 -> "In a world of autocorrect fails, remains your faithful scribe."
+            9 -> "Fine-tuning your 'ums' and 'ahs'—catching them when they count but skimming over when they're just filler."
+            10 -> "Don't worry about the loud coffee shop. I listen to you, not the latte art."
+            11 -> "Bridging the gap between brainwaves and text, one word at a time."
+            12 -> "You do the talking; I handle the typing. Teamwork makes the dream work."
+            13 -> "Where your voice gets VIP treatment, no velvet rope required."
+            14 -> "Who needs a pen pal when you've got me? Turning ramble into romance and gibberish into genius!"
+            15 -> "Unofficially competing for the title of 'World’s Most Patient Listener' since launch."
+            else -> "Hey! Stop reading my source code without my consent! Just kidding, I'm open source :)"
         }
     }
 
@@ -119,7 +137,13 @@ fun StartScreen() {
                 }
                 Spacer(Modifier.size(16.dp))
                 Text(
-                    text = stringResource(R.string.welcome),
+                    text = stringResource(
+                        if (isAprilFools) {
+                            R.string.welcome_april_fools
+                        } else {
+                            R.string.welcome
+                        }
+                    ),
                     style = MaterialTheme.typography.headlineLarge
                 )
                 Text(
