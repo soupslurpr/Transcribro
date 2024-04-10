@@ -1,9 +1,12 @@
 package dev.soupslurpr.transcribro.ui.voiceinput
 
 import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration.ORIENTATION_PORTRAIT
 import android.inputmethodservice.InputMethodService
+import android.media.AudioManager
+import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
@@ -89,6 +92,7 @@ import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import dev.soupslurpr.transcribro.R
 import dev.soupslurpr.transcribro.dataStore
 import dev.soupslurpr.transcribro.preferences.PreferencesViewModel
 import dev.soupslurpr.transcribro.recognitionservice.MainRecognitionService
@@ -123,6 +127,12 @@ class VoiceInput : InputMethodService() {
 
         view.setContent {
             val context = LocalContext.current
+
+            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+
+            val startedRecognitionMediaPlayer = MediaPlayer.create(context, R.raw.started_recognition)
+
+            val stoppedRecognitionMediaPlayer = MediaPlayer.create(context, R.raw.stopped_recognition)
 
             val hapticFeedback = LocalHapticFeedback.current
 
@@ -221,6 +231,10 @@ class VoiceInput : InputMethodService() {
                                                 RecognitionListener {
                                                 override fun onReadyForSpeech(params: Bundle?) {
                                                     isRecognizing = true
+
+                                                    if (audioManager.ringerMode == AudioManager.RINGER_MODE_NORMAL) {
+                                                        startedRecognitionMediaPlayer.start()
+                                                    }
                                                 }
 
                                                 override fun onBeginningOfSpeech() {
@@ -263,6 +277,11 @@ class VoiceInput : InputMethodService() {
 
                                                 override fun onResults(results: Bundle?) {
                                                     isRecognizing = false
+
+                                                    if (audioManager.ringerMode == AudioManager.RINGER_MODE_NORMAL) {
+                                                        stoppedRecognitionMediaPlayer.start()
+                                                    }
+
                                                     if (preferencesUiState.autoSwitchToPreviousInputMethod.second.value) {
                                                         this@VoiceInput.switchToPreviousInputMethod()
                                                     }
