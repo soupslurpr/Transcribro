@@ -15,7 +15,7 @@ data class PreferencesUiState(
 
     /** Whether the user has accepted the privacy policy and license. */
     val acceptedPrivacyPolicyAndLicense: Pair<Preferences.Key<Boolean>, MutableState<Boolean>> = Pair(
-        (booleanPreferencesKey("ACCEPTED_PRIVACY_POLICY_AND_LICENSE_V0.2.0")),
+        (booleanPreferencesKey("ACCEPTED_PRIVACY_POLICY_AND_LICENSE_V0.3.0")),
         mutableStateOf(false)
     ),
 
