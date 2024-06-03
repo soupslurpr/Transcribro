@@ -82,17 +82,11 @@ fun TranscribroApp(actionApplicationPreferences: Boolean) {
 
     val snackbarCoroutine = rememberCoroutineScope()
 
-    val navBarSelected = if (currentScreen.name.startsWith("Start")) {
-        TranscribroAppScreens.Start
-    } else if (currentScreen.name.startsWith("Settings")) {
-        TranscribroAppScreens.Settings
-    } else if (currentScreen.name.startsWith("Donate")) {
-        TranscribroAppScreens.Donate
-    } else {
-        currentScreen
+    val navBarSelected = navBarScreens.find {
+        currentScreen.name.startsWith(it.name)
     }
 
-    val topAppBarScrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior(rememberTopAppBarState())
+    val topAppBarScrollBehavior = TopAppBarDefaults.pinnedScrollBehavior(rememberTopAppBarState())
 
     Scaffold(
         modifier = Modifier
@@ -116,72 +110,59 @@ fun TranscribroApp(actionApplicationPreferences: Boolean) {
                         }
                     }
                 },
-                windowInsets =
-                WindowInsets(
-                    top = ((16f + TopAppBarDefaults.windowInsets.asPaddingValues()
-                        .calculateTopPadding().value) * ((topAppBarScrollBehavior.state.heightOffset / topAppBarScrollBehavior.state.heightOffsetLimit) - 1f).absoluteValue).dp,
-                    bottom = ((16f + TopAppBarDefaults.windowInsets.asPaddingValues()
-                        .calculateBottomPadding().value) * ((topAppBarScrollBehavior.state.heightOffset / topAppBarScrollBehavior.state.heightOffsetLimit) - 1f).absoluteValue).dp,
-                    left = TopAppBarDefaults.windowInsets.asPaddingValues()
-                        .calculateLeftPadding(LocalLayoutDirection.current),
-                    right = TopAppBarDefaults.windowInsets.asPaddingValues()
-                        .calculateRightPadding(LocalLayoutDirection.current)
-                ),
                 scrollBehavior = topAppBarScrollBehavior
             )
         },
         bottomBar = {
-            NavigationBar {
-                listOf(
-                    TranscribroAppScreens.Start,
-                    TranscribroAppScreens.Settings,
-                    TranscribroAppScreens.Donate
-                ).forEach { bottomBarScreen ->
-                    NavigationBarItem(
-                        selected = bottomBarScreen == navBarSelected,
-                        onClick = {
-                            navController.navigate(bottomBarScreen.name) {
-                                popUpTo(navController.graph.findStartDestination().id) {
-                                    saveState = true
+            if (navBarSelected != null) {
+                NavigationBar {
+                    navBarScreens.forEach { navBarScreen ->
+                        NavigationBarItem(
+                            selected = navBarScreen == navBarSelected,
+                            onClick = {
+                                navController.navigate(navBarScreen.name) {
+                                    popUpTo(navController.graph.findStartDestination().id) {
+                                        saveState = true
+                                    }
+                                    launchSingleTop = true
+                                    restoreState = true
                                 }
-                                launchSingleTop = true
-                                restoreState = true
-                            }
-                        },
-                        icon = {
-                            when (bottomBarScreen) {
-                                TranscribroAppScreens.Start -> Icon(
-                                    imageVector = if (navBarSelected == bottomBarScreen) {
-                                        Icons.Filled.Home
-                                    } else {
-                                        Icons.Outlined.Home
-                                    },
-                                    contentDescription = null
-                                )
+                            },
+                            icon = {
+                                when (navBarScreen) {
+                                    TranscribroAppScreens.Start -> Icon(
+                                        imageVector = if (navBarSelected == navBarScreen) {
+                                            Icons.Filled.Home
+                                        } else {
+                                            Icons.Outlined.Home
+                                        },
+                                        contentDescription = null
+                                    )
 
-                                TranscribroAppScreens.Settings -> Icon(
-                                    imageVector = if (navBarSelected == bottomBarScreen) {
-                                        Icons.Filled.Settings
-                                    } else {
-                                        Icons.Outlined.Settings
-                                    },
-                                    contentDescription = null
-                                )
+                                    TranscribroAppScreens.Settings -> Icon(
+                                        imageVector = if (navBarSelected == navBarScreen) {
+                                            Icons.Filled.Settings
+                                        } else {
+                                            Icons.Outlined.Settings
+                                        },
+                                        contentDescription = null
+                                    )
 
-                                TranscribroAppScreens.Donate -> Icon(
-                                    imageVector = if (navBarSelected == bottomBarScreen) {
-                                        Icons.Filled.VolunteerActivism
-                                    } else {
-                                        Icons.Outlined.VolunteerActivism
-                                    },
-                                    contentDescription = null
-                                )
+                                    TranscribroAppScreens.Donate -> Icon(
+                                        imageVector = if (navBarSelected == navBarScreen) {
+                                            Icons.Filled.VolunteerActivism
+                                        } else {
+                                            Icons.Outlined.VolunteerActivism
+                                        },
+                                        contentDescription = null
+                                    )
 
-                                else -> {}
-                            }
-                        },
-                        label = { Text(text = stringResource(id = bottomBarScreen.title)) }
-                    )
+                                    else -> {}
+                                }
+                            },
+                            label = { Text(text = stringResource(id = navBarScreen.title)) }
+                        )
+                    }
                 }
             }
         },
