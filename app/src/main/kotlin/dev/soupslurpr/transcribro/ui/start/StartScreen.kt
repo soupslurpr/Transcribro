@@ -16,15 +16,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Info
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -61,12 +56,6 @@ fun StartScreen() {
     val microphonePermissionState = rememberPermissionState(
         Manifest.permission.RECORD_AUDIO
     )
-
-    var showGrantMicPermAlertDialog by rememberSaveable {
-        mutableStateOf(
-            !microphonePermissionState.status.isGranted
-        )
-    }
 
     var isMyInputMethodEnabled by rememberSaveable {
         mutableStateOf(
@@ -154,32 +143,6 @@ fun StartScreen() {
             }
         }
         item {
-            if (showGrantMicPermAlertDialog) {
-                AlertDialog(
-                    onDismissRequest = { showGrantMicPermAlertDialog = false },
-                    confirmButton = {
-                        TextButton(
-                            onClick = {
-                                showGrantMicPermAlertDialog = false
-                                microphonePermissionState.launchPermissionRequest()
-                            }
-                        ) {
-                            Text(text = "OK")
-                        }
-                    },
-                    icon = {
-                        Icon(imageVector = Icons.Outlined.Info, contentDescription = null)
-                    },
-                    title = {
-                        Text("Please grant microphone access.")
-                    },
-                    text = {
-                        Text("Microphone access (While using the app) is needed for ${stringResource(id = R.string.app_name)} to function.")
-                    }
-                )
-            }
-        }
-        item {
             if (!isMyInputMethodEnabled) {
                 ElevatedCard {
                     Column(
@@ -207,19 +170,30 @@ fun StartScreen() {
                 ) {
                     Text(
                         "If you want other apps that use the user-selected voice input app to use Transcribro," +
-                                " you need to select Transcribro Speech Recognition Service as the voice input app in settings." +
-                                " Go to System > Languages > Voice input, and make sure Transcribro is selected as the voice input app." +
-                                " If you don't have any other voice input apps, Transcribro will already be selected.",
+                                " you need to grant Transcribro Microphone access " +
+                                "(make sure to select \"While using the app\" or it won't work properly), and then select " +
+                                "Transcribro Speech Recognition Service as the voice input app in settings." +
+                                " Go to System > Languages > Voice input, and then make sure Transcribro Speech Recognition Service is selected as the voice input app.",
                     )
                     Spacer(Modifier.padding(8.dp))
                     FilledTonalButton(
+                        enabled = !microphonePermissionState.status.isGranted,
+                        onClick = {
+                            microphonePermissionState.launchPermissionRequest()
+                        }
+                    ) {
+                        Text("Grant microphone permission (make sure to select \"While using the app\")")
+                    }
+                    Spacer(Modifier.padding(4.dp))
+                    FilledTonalButton(
+                        enabled = microphonePermissionState.status.isGranted,
                         onClick = {
                             val intent = Intent(Settings.ACTION_SETTINGS)
                             intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
                             context.startActivity(intent)
                         }
                     ) {
-                        Text("Open settings")
+                        Text("Open settings (Navigate to System > Languages > Voice input)")
                     }
                     Spacer(Modifier.padding(8.dp))
                     Text("If you already selected Transcribro as the voice input app, please ignore this.")
