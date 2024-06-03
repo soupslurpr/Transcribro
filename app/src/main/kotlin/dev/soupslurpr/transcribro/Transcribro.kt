@@ -1,6 +1,10 @@
 package dev.soupslurpr.transcribro
 
 import androidx.annotation.StringRes
+import androidx.compose.animation.AnimatedContentScope
+import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -39,9 +43,11 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.unit.dp
+import androidx.navigation.NamedNavArgument
 import androidx.navigation.NavBackStackEntry
+import androidx.navigation.NavDeepLink
 import androidx.navigation.NavGraph.Companion.findStartDestination
+import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -54,7 +60,6 @@ import dev.soupslurpr.transcribro.ui.settings.PrivacyPolicyScreen
 import dev.soupslurpr.transcribro.ui.settings.SettingsStartScreen
 import dev.soupslurpr.transcribro.ui.start.StartScreen
 import kotlinx.coroutines.launch
-import kotlin.math.absoluteValue
 
 enum class TranscribroAppScreens(@StringRes val title: Int) {
     Start(title = R.string.start),
@@ -65,8 +70,14 @@ enum class TranscribroAppScreens(@StringRes val title: Int) {
     SettingsPrivacyPolicy(title = R.string.privacy_policy),
     SettingsCredits(title = R.string.credits),
     Donate(title = R.string.donate),
-    DonateStart(title = R.string.donate)
+    DonateStart(title = R.string.donate),
 }
+
+val navBarScreens = listOf(
+    TranscribroAppScreens.Start,
+    TranscribroAppScreens.Settings,
+    TranscribroAppScreens.Donate,
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -193,70 +204,22 @@ fun TranscribroApp(actionApplicationPreferences: Boolean) {
         ) {
             navigation(
                 route = TranscribroAppScreens.Start.name,
+            navigationWithDefaultSlideTransitions(
+                route = TranscribroAppScreens.Start,
                 startDestination = TranscribroAppScreens.StartStart.name,
-                enterTransition = {
-                    topAppBarScrollBehavior.state.heightOffset = 0f
-
-                    slideIn { IntOffset(-it.width, 0) } + fadeIn()
-                },
-                exitTransition = {
-                    slideOut { IntOffset(-it.width, 0) } + fadeOut()
-                },
-                popEnterTransition = {
-                    if (getInitialStateNavBarRoute(initialState) == TranscribroAppScreens.Donate) {
-                        slideIn { IntOffset(-it.width, 0) }
-                    } else {
-                        slideIn { IntOffset(-it.width, 0) }
-                    } + fadeIn()
-                },
-                popExitTransition = {
-                    slideOut { IntOffset(it.width, 0) } + fadeOut()
-                }
             ) {
-                composable(
-                    route = TranscribroAppScreens.StartStart.name
+                composableWithDefaultSlideTransitions(
+                    route = TranscribroAppScreens.StartStart
                 ) {
                     StartScreen()
                 }
             }
-            navigation(
-                route = TranscribroAppScreens.Settings.name,
+            navigationWithDefaultSlideTransitions(
+                route = TranscribroAppScreens.Settings,
                 startDestination = TranscribroAppScreens.SettingsStart.name,
-                enterTransition = {
-                    topAppBarScrollBehavior.state.heightOffset = 0f
-
-                    if (getInitialStateNavBarRoute(initialState) == TranscribroAppScreens.Start) {
-                        slideIn { IntOffset(it.width, 0) }
-                    } else if (getInitialStateNavBarRoute(initialState) == TranscribroAppScreens.Donate) {
-                        slideIn { IntOffset(-it.width, 0) }
-                    } else {
-                        slideIn { IntOffset(it.width, 0) }
-                    } + fadeIn()
-                },
-                exitTransition = {
-                    if (getTargetStateNavBarRoute(targetState) == TranscribroAppScreens.Start) {
-                        slideOut { IntOffset(it.width, 0) }
-                    } else if (getTargetStateNavBarRoute(targetState) == TranscribroAppScreens.Donate) {
-                        slideOut { IntOffset(-it.width, 0) }
-                    } else {
-                        slideOut { IntOffset(-it.width, 0) }
-                    } + fadeOut()
-                },
-                popEnterTransition = {
-                    if (getInitialStateNavBarRoute(initialState) == TranscribroAppScreens.Start) {
-                        slideIn { IntOffset(it.width, 0) }
-                    } else if (getInitialStateNavBarRoute(initialState) == TranscribroAppScreens.Donate) {
-                        slideIn { IntOffset(-it.width, 0) }
-                    } else {
-                        slideIn { IntOffset(-it.width, 0) }
-                    } + fadeIn()
-                },
-                popExitTransition = {
-                    slideOut { IntOffset(it.width, 0) } + fadeOut()
-                }
             ) {
-                composable(
-                    route = TranscribroAppScreens.SettingsStart.name
+                composableWithDefaultSlideTransitions(
+                    route = TranscribroAppScreens.SettingsStart
                 ) {
                     SettingsStartScreen(
                         onClickLicense = {
@@ -270,61 +233,30 @@ fun TranscribroApp(actionApplicationPreferences: Boolean) {
                         }
                     )
                 }
-                composable(
-                    route = TranscribroAppScreens.SettingsLicense.name
+                composableWithDefaultSlideTransitions(
+                    route = TranscribroAppScreens.SettingsLicense
                 ) {
                     LicenseScreen()
                 }
-                composable(
-                    route = TranscribroAppScreens.SettingsPrivacyPolicy.name
+                composableWithDefaultSlideTransitions(
+                    route = TranscribroAppScreens.SettingsPrivacyPolicy
                 ) {
                     PrivacyPolicyScreen()
                 }
-                composable(
-                    route = TranscribroAppScreens.SettingsCredits.name
+                composableWithDefaultSlideTransitions(
+                    route = TranscribroAppScreens.SettingsCredits
                 ) {
                     CreditsScreen {
                         {} // No Rust?
                     }
                 }
             }
-            navigation(
-                route = TranscribroAppScreens.Donate.name,
+            navigationWithDefaultSlideTransitions(
+                route = TranscribroAppScreens.Donate,
                 startDestination = TranscribroAppScreens.DonateStart.name,
-                enterTransition = {
-                    topAppBarScrollBehavior.state.heightOffset = 0f
-                    if (getInitialStateNavBarRoute(initialState) == TranscribroAppScreens.Start) {
-                        slideIn { IntOffset(it.width, 0) }
-                    } else if (getInitialStateNavBarRoute(initialState) == TranscribroAppScreens.Settings) {
-                        slideIn { IntOffset(it.width, 0) }
-                    } else {
-                        slideIn { IntOffset(it.width, 0) }
-                    } + fadeIn()
-                },
-                exitTransition = {
-                    if (getTargetStateNavBarRoute(targetState) == TranscribroAppScreens.Start) {
-                        slideOut { IntOffset(it.width, 0) }
-                    } else if (getTargetStateNavBarRoute(targetState) == TranscribroAppScreens.Settings) {
-                        slideOut { IntOffset(it.width, 0) }
-                    } else {
-                        slideOut { IntOffset(-it.width, 0) }
-                    } + fadeOut()
-                },
-                popEnterTransition = {
-                    if (getInitialStateNavBarRoute(initialState) == TranscribroAppScreens.Start) {
-                        slideIn { IntOffset(it.width, 0) }
-                    } else if (getInitialStateNavBarRoute(initialState) == TranscribroAppScreens.Settings) {
-                        slideIn { IntOffset(it.width, 0) }
-                    } else {
-                        slideIn { IntOffset(-it.width, 0) }
-                    } + fadeIn()
-                },
-                popExitTransition = {
-                    slideOut { IntOffset(it.width, 0) } + fadeOut()
-                }
             ) {
-                composable(
-                    route = TranscribroAppScreens.DonateStart.name
+                composableWithDefaultSlideTransitions(
+                    route = TranscribroAppScreens.DonateStart
                 ) {
                     DonateStartScreen(
                         showSnackbarError = {
@@ -339,30 +271,147 @@ fun TranscribroApp(actionApplicationPreferences: Boolean) {
     }
 }
 
-fun getTargetStateNavBarRoute(targetState: NavBackStackEntry): TranscribroAppScreens {
-    return if (targetState.destination.route?.startsWith("Start") == true) {
-        TranscribroAppScreens.Start
-    } else if (targetState.destination.route?.startsWith("Settings") == true) {
-        TranscribroAppScreens.Settings
-    } else if (targetState.destination.route?.startsWith("Donate") == true) {
-        TranscribroAppScreens.Donate
+fun getStateNavBarRoute(state: NavBackStackEntry): TranscribroAppScreens? {
+    state.destination.route?.let { return TranscribroAppScreens.valueOf(it) }
+    return null
+}
+
+fun getEnterTransition(initialState: NavBackStackEntry, targetState: NavBackStackEntry): EnterTransition {
+    val initialNavBarRoute = getStateNavBarRoute(initialState)
+    val targetNavBarRoute = getStateNavBarRoute(targetState)
+
+    return if ((initialNavBarRoute != null) && (targetNavBarRoute != null)) {
+        slideIn {
+            IntOffset(
+                if (initialNavBarRoute.ordinal > targetNavBarRoute.ordinal) {
+                    -it.width
+                } else {
+                    it.width
+                },
+                0
+            )
+        } + fadeIn()
     } else {
-        TranscribroAppScreens.entries.find {
-            it.name == targetState.destination.route
-        } ?: TranscribroAppScreens.Start
+        EnterTransition.None
     }
 }
 
-fun getInitialStateNavBarRoute(initialState: NavBackStackEntry): TranscribroAppScreens {
-    return if (initialState.destination.route?.startsWith("Start") == true) {
-        TranscribroAppScreens.Start
-    } else if (initialState.destination.route?.startsWith("Settings") == true) {
-        TranscribroAppScreens.Settings
-    } else if (initialState.destination.route?.startsWith("Donate") == true) {
-        TranscribroAppScreens.Donate
+fun getExitTransition(initialState: NavBackStackEntry, targetState: NavBackStackEntry): ExitTransition {
+    val initialNavBarRoute = getStateNavBarRoute(initialState)
+    val targetNavBarRoute = getStateNavBarRoute(targetState)
+
+    return if ((initialNavBarRoute != null) && (targetNavBarRoute != null)) {
+        slideOut {
+            IntOffset(
+                if (initialNavBarRoute.ordinal > targetNavBarRoute.ordinal) {
+                    it.width
+                } else {
+                    -it.width
+                },
+                0
+            )
+        } + fadeOut()
     } else {
-        TranscribroAppScreens.entries.find {
-            it.name == initialState.destination.route
-        } ?: TranscribroAppScreens.Start
+        ExitTransition.None
     }
+}
+
+fun NavGraphBuilder.composableWithDefaultSlideTransitions(
+    route: TranscribroAppScreens,
+    arguments: List<NamedNavArgument> = emptyList(),
+    deepLinks: List<NavDeepLink> = emptyList(),
+    enterTransition: @JvmSuppressWildcards (AnimatedContentTransitionScope<NavBackStackEntry>.() -> EnterTransition?)? = null,
+    exitTransition: @JvmSuppressWildcards (AnimatedContentTransitionScope<NavBackStackEntry>.() -> ExitTransition?)? = null,
+    popEnterTransition: @JvmSuppressWildcards (AnimatedContentTransitionScope<NavBackStackEntry>.() -> EnterTransition?)? = enterTransition,
+    popExitTransition: @JvmSuppressWildcards (AnimatedContentTransitionScope<NavBackStackEntry>.() -> ExitTransition?)? = exitTransition,
+    content: @Composable (AnimatedContentScope.(NavBackStackEntry) -> Unit)
+) {
+    composable(
+        route.name,
+        arguments,
+        deepLinks,
+        if (enterTransition == null) {
+            {
+                getEnterTransition(initialState, targetState)
+            }
+        } else {
+            null
+        },
+        if (exitTransition == null) {
+            {
+                getExitTransition(initialState, targetState)
+            }
+        } else {
+            null
+        },
+        if (popEnterTransition == null) {
+            {
+                getEnterTransition(initialState, targetState)
+            }
+        } else {
+            null
+        },
+        if (popExitTransition == null) {
+            {
+                getExitTransition(initialState, targetState)
+            }
+        } else {
+            null
+        },
+        content
+    )
+}
+
+fun NavGraphBuilder.navigationWithDefaultSlideTransitions(
+    startDestination: String,
+    route: TranscribroAppScreens,
+    arguments: List<NamedNavArgument> = emptyList(),
+    deepLinks: List<NavDeepLink> = emptyList(),
+    enterTransition: @JvmSuppressWildcards (AnimatedContentTransitionScope<NavBackStackEntry>.() -> EnterTransition?)? =
+        null,
+    exitTransition: (AnimatedContentTransitionScope<NavBackStackEntry>.() -> ExitTransition?)? =
+        null,
+    popEnterTransition: (
+    AnimatedContentTransitionScope<NavBackStackEntry>.() -> EnterTransition?
+    )? = enterTransition,
+    popExitTransition: (
+    AnimatedContentTransitionScope<NavBackStackEntry>.() -> ExitTransition?
+    )? = exitTransition,
+    builder: NavGraphBuilder.() -> Unit
+) {
+    navigation(
+        startDestination,
+        route.name,
+        arguments,
+        deepLinks,
+        if (enterTransition == null) {
+            {
+                getEnterTransition(initialState, targetState)
+            }
+        } else {
+            null
+        },
+        if (exitTransition == null) {
+            {
+                getExitTransition(initialState, targetState)
+            }
+        } else {
+            null
+        },
+        if (popEnterTransition == null) {
+            {
+                getEnterTransition(initialState, targetState)
+            }
+        } else {
+            null
+        },
+        if (popExitTransition == null) {
+            {
+                getExitTransition(initialState, targetState)
+            }
+        } else {
+            null
+        },
+        builder
+    )
 }
