@@ -3,6 +3,7 @@ package dev.soupslurpr.transcribro
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.speech.RecognizerIntent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -18,7 +19,7 @@ import dev.soupslurpr.transcribro.ui.theme.TranscribroTheme
 
 val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "preferences")
 
-class MainActivity : ComponentActivity() {
+open class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
@@ -37,7 +38,8 @@ class MainActivity : ComponentActivity() {
                     ReviewPrivacyPolicyAndLicense(preferencesViewModel = preferencesViewModel)
                 } else if (preferencesUiState.acceptedPrivacyPolicyAndLicense.second.value) {
                     TranscribroApp(
-                        intent.action == Intent.ACTION_APPLICATION_PREFERENCES
+                        intent.action == Intent.ACTION_APPLICATION_PREFERENCES,
+                        intent.action == RecognizerIntent.ACTION_RECOGNIZE_SPEECH,
                     )
                 }
             }

@@ -2,4 +2,13 @@
 <resources>
 
     <style name="Theme.transcribro" parent="Theme.Material3.DayNight.NoActionBar" />
+
+    <style name="Theme.FloatingWindow" parent="@android:style/Theme.Dialog">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowIsFloating">true</item>
+        <item name="android:backgroundDimAmount">0.4</item>
+    </style>
 </resources>

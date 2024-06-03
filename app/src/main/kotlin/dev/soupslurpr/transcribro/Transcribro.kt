@@ -1,5 +1,6 @@
 package dev.soupslurpr.transcribro
 
+import android.content.res.Configuration
 import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedContentScope
 import androidx.compose.animation.AnimatedContentTransitionScope
@@ -10,8 +11,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideIn
 import androidx.compose.animation.slideOut
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -40,7 +40,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.IntOffset
 import androidx.navigation.NamedNavArgument
@@ -53,6 +53,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.navigation
 import androidx.navigation.compose.rememberNavController
+import dev.soupslurpr.transcribro.ui.action_recognize_speech.ActionRecognizeSpeechScreen
 import dev.soupslurpr.transcribro.ui.donate.DonateStartScreen
 import dev.soupslurpr.transcribro.ui.settings.CreditsScreen
 import dev.soupslurpr.transcribro.ui.settings.LicenseScreen
@@ -62,6 +63,8 @@ import dev.soupslurpr.transcribro.ui.start.StartScreen
 import kotlinx.coroutines.launch
 
 enum class TranscribroAppScreens(@StringRes val title: Int) {
+    ActionRecognizeSpeech(title = R.string.app_name),
+
     Start(title = R.string.start),
     StartStart(title = R.string.start),
     Settings(title = R.string.settings),
@@ -81,7 +84,10 @@ val navBarScreens = listOf(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TranscribroApp(actionApplicationPreferences: Boolean) {
+fun TranscribroApp(
+    actionApplicationPreferences: Boolean,
+    actionRecognizeSpeech: Boolean,
+) {
     val navController = rememberNavController()
 
     val backStackEntry by navController.currentBackStackEntryAsState()
@@ -100,9 +106,22 @@ fun TranscribroApp(actionApplicationPreferences: Boolean) {
     val topAppBarScrollBehavior = TopAppBarDefaults.pinnedScrollBehavior(rememberTopAppBarState())
 
     Scaffold(
-        modifier = Modifier
-            .nestedScroll(topAppBarScrollBehavior.nestedScrollConnection)
-            .animateContentSize(),
+        modifier = Modifier.run {
+            var modifier = this
+                .nestedScroll(topAppBarScrollBehavior.nestedScrollConnection)
+                .animateContentSize()
+
+            if (actionRecognizeSpeech) {
+                modifier = if (LocalConfiguration.current.orientation == Configuration.ORIENTATION_PORTRAIT) {
+                    modifier.fillMaxHeight(0.4f)
+                } else {
+                    modifier
+                        .fillMaxHeight(0.9f)
+                }
+            }
+
+            modifier
+        },
         topBar = {
             TopAppBar(
                 title = {
@@ -185,6 +204,8 @@ fun TranscribroApp(actionApplicationPreferences: Boolean) {
             navController = navController,
             startDestination = if (actionApplicationPreferences) {
                 TranscribroAppScreens.Settings.name
+            } else if (actionRecognizeSpeech) {
+                TranscribroAppScreens.ActionRecognizeSpeech.name
             } else {
                 TranscribroAppScreens.Start.name
             },
@@ -202,8 +223,22 @@ fun TranscribroApp(actionApplicationPreferences: Boolean) {
                 slideOut { IntOffset(it.width, 0) } + fadeOut()
             }
         ) {
-            navigation(
-                route = TranscribroAppScreens.Start.name,
+            composableWithDefaultSlideTransitions(
+                route = TranscribroAppScreens.ActionRecognizeSpeech
+            ) {
+                ActionRecognizeSpeechScreen(
+                    showSnackbarError = { message, actionLabel, withDismissAction, duration ->
+                        snackbarCoroutine.launch {
+                            snackbarHostState.showSnackbar(
+                                message,
+                                actionLabel,
+                                withDismissAction,
+                                duration,
+                            )
+                        }
+                    }
+                )
+            }
             navigationWithDefaultSlideTransitions(
                 route = TranscribroAppScreens.Start,
                 startDestination = TranscribroAppScreens.StartStart.name,

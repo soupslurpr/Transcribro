@@ -23,7 +23,6 @@ import android.view.inputmethod.InputConnection
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -103,13 +102,13 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-var speechRecognizer: MutableState<SpeechRecognizer?> = mutableStateOf(null)
+private var speechRecognizer: MutableState<SpeechRecognizer?> = mutableStateOf(null)
 
-var isRecognizing by mutableStateOf(false)
+private var isRecognizing by mutableStateOf(false)
 
-var showInsufficientPermissionsError by mutableStateOf(false)
+private var showInsufficientPermissionsError by mutableStateOf(false)
 
-var isSpeaking by mutableStateOf(false)
+private var isSpeaking by mutableStateOf(false)
 
 class VoiceInput : InputMethodService() {
     private val voiceInputLifecycleOwner = VoiceInputLifecycleOwner()
@@ -119,7 +118,7 @@ class VoiceInput : InputMethodService() {
         voiceInputLifecycleOwner.onCreate()
     }
 
-    @OptIn(ExperimentalComposeUiApi::class, ExperimentalLayoutApi::class)
+    @OptIn(ExperimentalComposeUiApi::class)
     override fun onCreateInputView(): View {
         voiceInputLifecycleOwner.attachToDecorView(window?.window?.decorView)
 
