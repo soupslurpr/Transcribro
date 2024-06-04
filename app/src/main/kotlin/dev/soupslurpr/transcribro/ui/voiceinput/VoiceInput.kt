@@ -298,6 +298,7 @@ class VoiceInput : InputMethodService() {
                                                                         2,
                                                                         0
                                                                     ) == "") || (ic.getTextBeforeCursor(1, 0) == "\n")
+                                                                    || (ic.getTextBeforeCursor(1, 0) == " ")
                                                                 ) {
                                                                     transcription.removePrefix(" ")
                                                                 } else {
