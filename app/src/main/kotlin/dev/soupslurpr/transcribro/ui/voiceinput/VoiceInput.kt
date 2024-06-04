@@ -293,23 +293,25 @@ class VoiceInput : InputMethodService() {
                                                                 SpeechRecognizer.RESULTS_RECOGNITION
                                                             )?.get(0) ?: ""
 
-                                                            val textToCommit = if ((ic.getTextBeforeCursor(
-                                                                    2,
-                                                                    0
-                                                                ) == "") || (ic.getTextBeforeCursor(1, 0) == "\n")
-                                                            ) {
-                                                                transcription.removePrefix(" ")
-                                                            } else {
-                                                                transcription
-                                                            }
+                                                            if (transcription.isNotEmpty()) {
+                                                                val textToCommit = if ((ic.getTextBeforeCursor(
+                                                                        2,
+                                                                        0
+                                                                    ) == "") || (ic.getTextBeforeCursor(1, 0) == "\n")
+                                                                ) {
+                                                                    transcription.removePrefix(" ")
+                                                                } else {
+                                                                    transcription
+                                                                }
 
-                                                            ic.commitText(
-                                                                textToCommit,
-                                                                1
-                                                            )
+                                                                ic.commitText(
+                                                                    textToCommit,
+                                                                    1
+                                                                )
 
-                                                            if (preferencesUiState.autoSendTranscription.second.value) {
-                                                                ic.performEditorAction(EditorInfo.IME_ACTION_SEND)
+                                                                if (preferencesUiState.autoSendTranscription.second.value) {
+                                                                    ic.performEditorAction(EditorInfo.IME_ACTION_SEND)
+                                                                }
                                                             }
                                                         }
                                                     }
