@@ -294,7 +294,7 @@ class VoiceInput : InputMethodService() {
                                                             )?.get(0) ?: ""
 
                                                             if (transcription.isNotEmpty()) {
-                                                                val textToCommit = if ((ic.getTextBeforeCursor(
+                                                                var textToCommit = if ((ic.getTextBeforeCursor(
                                                                         2,
                                                                         0
                                                                     ) == "") || (ic.getTextBeforeCursor(1, 0) == "\n")
@@ -303,6 +303,102 @@ class VoiceInput : InputMethodService() {
                                                                     transcription.removePrefix(" ")
                                                                 } else {
                                                                     transcription
+                                                                }
+
+                                                                val selectedText = ic.getSelectedText(0)
+
+                                                                val readdUppercase =
+                                                                    textToCommit.filter { it.isLetter() }.firstOrNull {
+                                                                        !it.isUpperCase()
+                                                                    } == null
+
+                                                                if (!selectedText.isNullOrEmpty()) {
+                                                                    val removeSuffixPoint =
+                                                                        textToCommit.trim().toList().withIndex()
+                                                                            .reversed().firstOrNull {
+                                                                                it.value.isLetterOrDigit()
+                                                                            }
+
+                                                                    if (removeSuffixPoint != null) {
+                                                                        textToCommit = textToCommit.trim()
+                                                                            .substring(0..removeSuffixPoint.index)
+                                                                    }
+
+                                                                    val removePrefixPoint =
+                                                                        textToCommit.trim().toList().withIndex()
+                                                                            .firstOrNull {
+                                                                                it.value.isLetterOrDigit()
+                                                                            }
+
+                                                                    if (removePrefixPoint != null) {
+                                                                        textToCommit = textToCommit.trim()
+                                                                            .substring(removePrefixPoint.index..textToCommit.trim().lastIndex)
+                                                                    }
+
+                                                                    val selectedEndOfWordPunctuation =
+                                                                        selectedText.trim().toList().withIndex()
+                                                                            .reversed().firstOrNull {
+                                                                                it.value.isLetterOrDigit()
+                                                                            }
+
+                                                                    val firstSelectedNonWhitespaceCharacter =
+                                                                        selectedText.trim().firstOrNull()
+
+                                                                    if (firstSelectedNonWhitespaceCharacter != null) {
+                                                                        textToCommit =
+                                                                            if (textToCommit.firstOrNull { !it.isUpperCase() } == null) {
+                                                                                textToCommit
+                                                                            } else if (firstSelectedNonWhitespaceCharacter.isUpperCase()) {
+                                                                                textToCommit[0].uppercaseChar() + textToCommit.substring(
+                                                                                    1..textToCommit.lastIndex
+                                                                                )
+                                                                            } else if (firstSelectedNonWhitespaceCharacter.isLowerCase()) {
+                                                                                textToCommit[0].lowercaseChar() + textToCommit.substring(
+                                                                                    1..textToCommit.lastIndex
+                                                                                )
+                                                                            } else if (selectedText.firstOrNull { it.isLetterOrDigit() || it.isWhitespace() } == null) {
+                                                                                textToCommit[0].lowercaseChar() + textToCommit.substring(
+                                                                                    1..textToCommit.lastIndex
+                                                                                )
+                                                                            } else {
+                                                                                textToCommit
+                                                                            }
+                                                                    }
+
+                                                                    if (selectedEndOfWordPunctuation != null) {
+                                                                        textToCommit += selectedText.trim()
+                                                                            .substring(selectedEndOfWordPunctuation.index + 1..selectedText.trim().lastIndex)
+                                                                    }
+
+                                                                    if (selectedText.firstOrNull { it.isLetterOrDigit() } == null) {
+                                                                        textToCommit = " $textToCommit"
+
+                                                                        if (textToCommit.last().isLetterOrDigit()) {
+                                                                            textToCommit = "$textToCommit$selectedText"
+                                                                        }
+                                                                    }
+                                                                } else {
+                                                                    val twoCharactersBeforeCursor =
+                                                                        ic.getTextBeforeCursor(2, 0)
+                                                                    val firstLetterOrDigit = textToCommit.withIndex()
+                                                                        .firstOrNull { it.value.isLetterOrDigit() }
+
+                                                                    if ((twoCharactersBeforeCursor != null) && (twoCharactersBeforeCursor.firstOrNull { it.isLetterOrDigit() } != null)) {
+                                                                        if (twoCharactersBeforeCursor[0].isLetterOrDigit() && (twoCharactersBeforeCursor[1].isLetterOrDigit() || twoCharactersBeforeCursor[1].isWhitespace())) {
+                                                                            if (firstLetterOrDigit != null) {
+                                                                                val chars = textToCommit.toCharArray()
+
+                                                                                chars[firstLetterOrDigit.index] =
+                                                                                    firstLetterOrDigit.value.lowercaseChar()
+
+                                                                                textToCommit = chars.concatToString()
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+
+                                                                if (readdUppercase) {
+                                                                    textToCommit = textToCommit.uppercase()
                                                                 }
 
                                                                 ic.commitText(
