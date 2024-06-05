@@ -241,7 +241,7 @@ fun CreditsScreen(
                 dependencyPackageName = "https://github.com/ggerganov/whisper.cpp",
                 dependencyLicense = "MIT License\n" +
                         "\n" +
-                        "Copyright (c) 2023 Georgi Gerganov\n" +
+                        "Copyright (c) 2023-2024 The ggml authors\n" +
                         "\n" +
                         "Permission is hereby granted, free of charge, to any person obtaining a copy\n" +
                         "of this software and associated documentation files (the \"Software\"), to deal\n" +
