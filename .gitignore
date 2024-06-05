@@ -21,7 +21,6 @@ local.properties
 /app/release/Transcribro-app-release.apks
 app/src/main/jniLibs/arm64-v8a/libtranscribro_rs.so
 app/src/main/jniLibs/x86_64/libtranscribro_rs.so
-/app/release/bundletool-all-1.15.6.jar
 app/src/main/jniLibs/arm64-v8a/libtranscribro_rs_compressed.so
 transcribro_rs/upx.exe
 /app/release/apk/release/app-release.apk
