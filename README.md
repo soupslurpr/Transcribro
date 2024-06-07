@@ -56,3 +56,7 @@ The [Monero](https://www.getmonero.org/) address and also a QR code can be found
 You may not use the name "Transcribro", a name that includes "Transcribro", and the app icon in a derivative work that
 has published builds.\
 This is to prevent confusion of which is the official Transcribro.
+
+# Screenshots
+
+![Screenshot of the keyboard UI, focused on the search bar of Vanadium's incognito tab.](/Screenshot_20240607-005336.png)
