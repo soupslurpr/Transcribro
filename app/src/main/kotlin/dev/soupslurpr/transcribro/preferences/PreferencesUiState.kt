@@ -4,6 +4,7 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
 
 /** Preference pairs, the first is the preference key, and the second is the default value. */
 data class PreferencesUiState(
@@ -41,5 +42,17 @@ data class PreferencesUiState(
     val autoSendTranscription: Pair<Preferences.Key<Boolean>, MutableState<Boolean>> = Pair(
         (booleanPreferencesKey("AUTO_SEND_TRANSCRIPTION")),
         mutableStateOf(false)
+    ),
+
+    /** API URL for the service. */
+    val apiUrl: Pair<Preferences.Key<String>, MutableState<String>> = Pair(
+        stringPreferencesKey("API_URL"),
+        mutableStateOf("http://tower.lan:9965")
+    ),
+
+    /** Model Name for the transcription. */
+    val modelName: Pair<Preferences.Key<String>, MutableState<String>> = Pair(
+        stringPreferencesKey("MODEL_NAME"),
+        mutableStateOf("ggml-faster-whisper-large-v3")
     )
 )

@@ -109,4 +109,6 @@ dependencies {
 //    implementation("net.java.dev.jna:jna:5.14.0@aar")
     implementation("com.google.accompanist:accompanist-permissions:0.35.1-alpha")
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.17.1")
+    implementation("com.squareup.okhttp3:okhttp:4.9.3")
+
 }

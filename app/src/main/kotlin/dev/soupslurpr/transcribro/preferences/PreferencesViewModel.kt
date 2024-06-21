@@ -81,6 +81,18 @@ class PreferencesViewModel(private val dataStore: DataStore<Preferences>) : View
                                 .first] ?: uiState.value
                                 .autoSendTranscription.second.value
                         )
+                    ),
+                    apiUrl = Pair(
+                        uiState.value.apiUrl.first,
+                        mutableStateOf(
+                            preferences[uiState.value.apiUrl.first] ?: uiState.value.apiUrl.second.value
+                        )
+                    ),
+                    modelName = Pair(
+                        uiState.value.modelName.first,
+                        mutableStateOf(
+                            preferences[uiState.value.modelName.first] ?: uiState.value.modelName.second.value
+                        )
                     )
                 )
             }
@@ -94,6 +106,30 @@ class PreferencesViewModel(private val dataStore: DataStore<Preferences>) : View
         viewModelScope.launch {
             dataStore.edit { preferences ->
                 preferences[key] = value
+            }
+        }
+    }
+
+    /**
+     * Set the API URL preference and save to Preferences DataStore
+     */
+    fun setApiUrl(url: String) {
+        _uiState.value.apiUrl.second.value = url // Update the MutableState
+        viewModelScope.launch {
+            dataStore.edit { preferences ->
+                preferences[uiState.value.apiUrl.first] = url
+            }
+        }
+    }
+
+    /**
+     * Set the Model Name preference and save to Preferences DataStore
+     */
+    fun setModelName(name: String) {
+        _uiState.value.modelName.second.value = name // Update the MutableState
+        viewModelScope.launch {
+            dataStore.edit { preferences ->
+                preferences[uiState.value.modelName.first] = name
             }
         }
     }

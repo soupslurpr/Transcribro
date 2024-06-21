@@ -2,6 +2,7 @@ package dev.soupslurpr.transcribro.ui.settings
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
@@ -10,11 +11,14 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -124,6 +128,29 @@ fun SettingsStartScreen(
                         preference.first,
                         it
                     )
+                }
+            )
+        }
+        item {
+            SettingsCategory(
+                stringResource(R.string.api_settings_category)
+            )
+        }
+        item {
+            SettingsTextFieldItem(
+                name = stringResource(id = R.string.api_url_setting_name),
+                value = preferencesUiState.apiUrl.second.value,  // Access the string value
+                onValueChange = {
+                    preferencesViewModel.setApiUrl(it)
+                }
+            )
+        }
+        item {
+            SettingsTextFieldItem(
+                name = stringResource(id = R.string.model_name_setting_name),
+                value = preferencesUiState.modelName.second.value,  // Access the string value
+                onValueChange = {
+                    preferencesViewModel.setModelName(it)
                 }
             )
         }
@@ -251,3 +278,18 @@ fun SettingsIconItem(
         }
     )
 }
+@Composable
+fun SettingsTextFieldItem(
+    modifier: Modifier = Modifier,
+    name: String,
+    value: String,
+    onValueChange: (String) -> Unit
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = { Text(name) },
+        modifier = modifier.fillMaxWidth()
+    )
+}
+
