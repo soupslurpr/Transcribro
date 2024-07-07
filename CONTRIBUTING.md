@@ -4,7 +4,7 @@ Thanks for your interest in contributing!
 
 If you want to suggest a feature or notify us about a bug, please use the issue tracker.
 
-When trying to imolement a feature, please make sure to discuss the planned implementation in the issue for the feature and get approval from @soupslurpr before working on it to ensure it meets the project's requirements.
+Before working on a feature, please make sure to discuss the planned implementation in the issue for the feature and get approval from @soupslurpr to ensure it meets the project's requirements.
 
 If you need help with development or have questions, it's recommended to join the Transcribro space on matrix at
 https://matrix.to/#/#transcribro:matrix.org and join the Transcribro General room and ask for help there from
