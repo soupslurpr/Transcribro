@@ -9,29 +9,29 @@ set(WHISPER_LIB_DIR ${CMAKE_SOURCE_DIR}/../../../../../whisper.cpp)
 option(GGML_HOME       "whisper: Path to external GGML source" OFF)
 
 set(
-    SOURCE_FILES
-    ${WHISPER_LIB_DIR}/whisper.cpp
-    ${CMAKE_SOURCE_DIR}/jni.c
-    )
+        SOURCE_FILES
+        ${WHISPER_LIB_DIR}/src/whisper.cpp
+        ${CMAKE_SOURCE_DIR}/jni.c
+)
 
 if (NOT GGML_HOME)
     set(
-        SOURCE_FILES
-        ${SOURCE_FILES}
-        ${WHISPER_LIB_DIR}/ggml.c
-        ${WHISPER_LIB_DIR}/ggml-alloc.c
-        ${WHISPER_LIB_DIR}/ggml-backend.c
-        ${WHISPER_LIB_DIR}/ggml-quants.c
-        )
+            SOURCE_FILES
+            ${SOURCE_FILES}
+            ${WHISPER_LIB_DIR}/ggml/src/ggml.c
+            ${WHISPER_LIB_DIR}/ggml/src/ggml-alloc.c
+            ${WHISPER_LIB_DIR}/ggml/src/ggml-backend.c
+            ${WHISPER_LIB_DIR}/ggml/src/ggml-quants.c
+    )
 endif()
 
 find_library(LOG_LIB log)
 
 function(build_library target_name)
     add_library(
-        ${target_name}
-        SHARED
-        ${SOURCE_FILES}
+            ${target_name}
+            SHARED
+            ${SOURCE_FILES}
     )
 
     if (${target_name} STREQUAL "whisper_v8fp16_va")
@@ -75,3 +75,7 @@ endif ()
 build_library("whisper") # Default target
 
 include_directories(${WHISPER_LIB_DIR})
+include_directories(${WHISPER_LIB_DIR}/src)
+include_directories(${WHISPER_LIB_DIR}/include)
+include_directories(${WHISPER_LIB_DIR}/ggml/include)
+include_directories(${WHISPER_LIB_DIR}/ggml/src)
