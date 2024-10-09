@@ -69,15 +69,6 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
     }
-    bundle {
-        language {
-            /** Disable splits for language for now since Accrescent does not support automatically
-             * fetching language splits when language is changed and instead needs a reinstall of the app.
-             * Remove once Accrescent gets support.
-             */
-            enableSplit = false
-        }
-    }
     dependenciesInfo {
         // Disables dependency metadata when building APKs.
         includeInApk = false
