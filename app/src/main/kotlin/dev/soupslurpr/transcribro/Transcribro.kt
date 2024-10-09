@@ -6,6 +6,7 @@ import androidx.compose.animation.AnimatedContentScope
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -355,46 +356,38 @@ fun NavGraphBuilder.composableWithDefaultSlideTransitions(
     route: TranscribroAppScreens,
     arguments: List<NamedNavArgument> = emptyList(),
     deepLinks: List<NavDeepLink> = emptyList(),
-    enterTransition: @JvmSuppressWildcards (AnimatedContentTransitionScope<NavBackStackEntry>.() -> EnterTransition?)? = null,
-    exitTransition: @JvmSuppressWildcards (AnimatedContentTransitionScope<NavBackStackEntry>.() -> ExitTransition?)? = null,
-    popEnterTransition: @JvmSuppressWildcards (AnimatedContentTransitionScope<NavBackStackEntry>.() -> EnterTransition?)? = enterTransition,
-    popExitTransition: @JvmSuppressWildcards (AnimatedContentTransitionScope<NavBackStackEntry>.() -> ExitTransition?)? = exitTransition,
-    content: @Composable (AnimatedContentScope.(NavBackStackEntry) -> Unit)
+    enterTransition: (@JvmSuppressWildcards AnimatedContentTransitionScope<NavBackStackEntry>.() -> EnterTransition?)? = null,
+    exitTransition: (@JvmSuppressWildcards AnimatedContentTransitionScope<NavBackStackEntry>.() -> ExitTransition?)? = null,
+    popEnterTransition: (@JvmSuppressWildcards AnimatedContentTransitionScope<NavBackStackEntry>.() -> EnterTransition?)? = enterTransition,
+    popExitTransition: (@JvmSuppressWildcards AnimatedContentTransitionScope<NavBackStackEntry>.() -> ExitTransition?)? = exitTransition,
+    sizeTransform: (@JvmSuppressWildcards AnimatedContentTransitionScope<NavBackStackEntry>.() -> SizeTransform?)? = null,
+    content: @Composable (AnimatedContentScope.(NavBackStackEntry) -> Unit),
 ) {
-    composable(
-        route.name,
-        arguments,
-        deepLinks,
-        if (enterTransition == null) {
-            {
-                getEnterTransition(initialState, targetState)
-            }
-        } else {
-            null
-        },
-        if (exitTransition == null) {
-            {
-                getExitTransition(initialState, targetState)
-            }
-        } else {
-            null
-        },
-        if (popEnterTransition == null) {
-            {
-                getEnterTransition(initialState, targetState)
-            }
-        } else {
-            null
-        },
-        if (popExitTransition == null) {
-            {
-                getExitTransition(initialState, targetState)
-            }
-        } else {
-            null
-        },
-        content
-    )
+    composable(route.name, arguments, deepLinks, if (enterTransition == null) {
+        {
+            getEnterTransition(initialState, targetState)
+        }
+    } else {
+        null
+    }, if (exitTransition == null) {
+        {
+            getExitTransition(initialState, targetState)
+        }
+    } else {
+        null
+    }, if (popEnterTransition == null) {
+        {
+            getEnterTransition(initialState, targetState)
+        }
+    } else {
+        null
+    }, if (popExitTransition == null) {
+        {
+            getExitTransition(initialState, targetState)
+        }
+    } else {
+        null
+    }, sizeTransform, content)
 }
 
 fun NavGraphBuilder.navigationWithDefaultSlideTransitions(
@@ -402,51 +395,36 @@ fun NavGraphBuilder.navigationWithDefaultSlideTransitions(
     route: TranscribroAppScreens,
     arguments: List<NamedNavArgument> = emptyList(),
     deepLinks: List<NavDeepLink> = emptyList(),
-    enterTransition: @JvmSuppressWildcards (AnimatedContentTransitionScope<NavBackStackEntry>.() -> EnterTransition?)? =
-        null,
-    exitTransition: (AnimatedContentTransitionScope<NavBackStackEntry>.() -> ExitTransition?)? =
-        null,
-    popEnterTransition: (
-    AnimatedContentTransitionScope<NavBackStackEntry>.() -> EnterTransition?
-    )? = enterTransition,
-    popExitTransition: (
-    AnimatedContentTransitionScope<NavBackStackEntry>.() -> ExitTransition?
-    )? = exitTransition,
-    builder: NavGraphBuilder.() -> Unit
+    enterTransition: (@JvmSuppressWildcards AnimatedContentTransitionScope<NavBackStackEntry>.() -> EnterTransition?)? = null,
+    exitTransition: (@JvmSuppressWildcards AnimatedContentTransitionScope<NavBackStackEntry>.() -> ExitTransition?)? = null,
+    popEnterTransition: (@JvmSuppressWildcards AnimatedContentTransitionScope<NavBackStackEntry>.() -> EnterTransition?)? = enterTransition,
+    popExitTransition: (@JvmSuppressWildcards AnimatedContentTransitionScope<NavBackStackEntry>.() -> ExitTransition?)? = exitTransition,
+    sizeTransform: (@JvmSuppressWildcards AnimatedContentTransitionScope<NavBackStackEntry>.() -> SizeTransform?)? = null,
+    builder: NavGraphBuilder.() -> Unit,
 ) {
-    navigation(
-        startDestination,
-        route.name,
-        arguments,
-        deepLinks,
-        if (enterTransition == null) {
-            {
-                getEnterTransition(initialState, targetState)
-            }
-        } else {
-            null
-        },
-        if (exitTransition == null) {
-            {
-                getExitTransition(initialState, targetState)
-            }
-        } else {
-            null
-        },
-        if (popEnterTransition == null) {
-            {
-                getEnterTransition(initialState, targetState)
-            }
-        } else {
-            null
-        },
-        if (popExitTransition == null) {
-            {
-                getExitTransition(initialState, targetState)
-            }
-        } else {
-            null
-        },
-        builder
-    )
+    navigation(startDestination, route.name, arguments, deepLinks, if (enterTransition == null) {
+        {
+            getEnterTransition(initialState, targetState)
+        }
+    } else {
+        null
+    }, if (exitTransition == null) {
+        {
+            getExitTransition(initialState, targetState)
+        }
+    } else {
+        null
+    }, if (popEnterTransition == null) {
+        {
+            getEnterTransition(initialState, targetState)
+        }
+    } else {
+        null
+    }, if (popExitTransition == null) {
+        {
+            getExitTransition(initialState, targetState)
+        }
+    } else {
+        null
+    }, sizeTransform, builder)
 }
