@@ -8,6 +8,7 @@ android {
     namespace = "dev.soupslurpr.transcribro"
     compileSdk = 35
     buildToolsVersion = "35.0.0"
+    ndkVersion = "27.1.12297006"
 
     defaultConfig {
         applicationId = "dev.soupslurpr.transcribro"
