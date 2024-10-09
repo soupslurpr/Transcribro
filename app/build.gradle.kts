@@ -97,6 +97,6 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     implementation("androidx.datastore:datastore-preferences:1.1.1")
-    implementation("com.google.accompanist:accompanist-permissions:0.35.1-alpha")
+    implementation("com.google.accompanist:accompanist-permissions:0.36.0")
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.18.0")
 }
