@@ -86,9 +86,7 @@ class MainRecognitionService : RecognitionService() {
                     val SPEECH_PAD_MS = 0
 
                     val model =
-                        this@MainRecognitionService.assets.open(
-                            "models/silero_vad/silero_vad.onnx"
-                        )
+                        this@MainRecognitionService.assets.open("models/silero_vad/silero_vad.with_runtime_opt.ort")
 
                     val modelBytes = model.readBytes()
 
