@@ -7,7 +7,7 @@ plugins {
 android {
     namespace = "dev.soupslurpr.transcribro"
     compileSdk = 35
-    buildToolsVersion = "34.0.0"
+    buildToolsVersion = "35.0.0"
 
     defaultConfig {
         applicationId = "dev.soupslurpr.transcribro"
