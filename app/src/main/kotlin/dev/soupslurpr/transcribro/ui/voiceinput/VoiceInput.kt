@@ -46,7 +46,6 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.Block
 import androidx.compose.material.icons.outlined.Done
 import androidx.compose.material.icons.outlined.Mic
-import androidx.compose.material.icons.outlined.MicOff
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilledIconToggleButton
@@ -560,11 +559,7 @@ class VoiceInput : InputMethodService() {
                                                 shape = RoundedCornerShape(10.dp)
                                             ) {
                                                 Icon(
-                                                    imageVector = if (isRecognizing) {
-                                                        Icons.Outlined.MicOff
-                                                    } else {
-                                                        Icons.Outlined.Mic
-                                                    },
+                                                    imageVector = Icons.Outlined.Mic,
                                                     contentDescription = if (isRecognizing) {
                                                         "Speech recognition active"
                                                     } else {

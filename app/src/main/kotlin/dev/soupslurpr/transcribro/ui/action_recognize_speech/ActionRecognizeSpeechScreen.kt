@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Mic
-import androidx.compose.material.icons.outlined.MicOff
 import androidx.compose.material3.FilledIconToggleButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.SnackbarDuration
@@ -182,11 +181,7 @@ fun ActionRecognizeSpeechScreen(
         shape = RoundedCornerShape(10.dp)
     ) {
         Icon(
-            imageVector = if (speechRecognizerUiState.isRecognizing) {
-                Icons.Outlined.MicOff
-            } else {
-                Icons.Outlined.Mic
-            },
+            imageVector = Icons.Outlined.Mic,
             contentDescription = if (speechRecognizerUiState.isRecognizing) {
                 "Speech recognition active"
             } else {
