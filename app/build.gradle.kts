@@ -7,7 +7,7 @@ plugins {
 android {
     namespace = "dev.soupslurpr.transcribro"
     compileSdk = 35
-    buildToolsVersion = "35.0.0"
+    buildToolsVersion = "35.0.1"
     ndkVersion = "27.2.12479018"
 
     defaultConfig {
