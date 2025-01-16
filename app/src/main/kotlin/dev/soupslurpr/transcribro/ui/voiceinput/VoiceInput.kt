@@ -173,9 +173,9 @@ class VoiceInput : InputMethodService() {
             }
 
             val maxHeight = if (LocalConfiguration.current.orientation == ORIENTATION_PORTRAIT) {
-                LocalConfiguration.current.screenHeightDp.dp * 0.4f
+                LocalConfiguration.current.screenHeightDp.dp * 0.45f
             } else {
-                LocalConfiguration.current.screenHeightDp.dp * 0.6f
+                LocalConfiguration.current.screenHeightDp.dp * 0.65f
             }
 
             TranscribroTheme(preferencesViewModel = preferencesViewModel) {
