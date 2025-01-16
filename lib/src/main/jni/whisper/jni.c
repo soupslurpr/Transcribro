@@ -184,7 +184,8 @@ Java_com_whispercpp_whisper_WhisperLib_00024Companion_fullTranscribe(
 
     // We changed these
     params.audio_ctx = audio_ctx;
-    params.suppress_non_speech_tokens = true;
+params.
+suppress_nst = true;
 
     whisper_reset_timings(context);
 
