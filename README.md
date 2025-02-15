@@ -59,4 +59,4 @@ This is to prevent confusion of which is the official Transcribro.
 
 ## Screenshots
 
-![Screenshot of the keyboard UI, focused on the search bar of Vanadium's incognito tab.](/Screenshot_20240607-005336.png)
+![Screenshot of the keyboard UI, focused on the search bar of Vanadium's incognito tab.](/Screenshot_20250214-223133.png)
