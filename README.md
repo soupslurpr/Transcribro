@@ -6,6 +6,10 @@ It features a voice input keyboard, enabling you to type with speech.\
 It can also be used by other apps either explicitly or when set as the user-selected speech to text app which some apps
 may use for speech to text.
 
+## Language support
+
+Transcribro currently only supports English. However, supporting other languages is planned and tracked in https://github.com/soupslurpr/Transcribro/issues/18.
+
 ## Download
 
 Transcribro is available on the [Accrescent](https://accrescent.app) app store and GitHub releases.\
