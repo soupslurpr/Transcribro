@@ -32,6 +32,8 @@ if (NOT GGML_HOME)
             ${WHISPER_LIB_DIR}/ggml/src/ggml-cpu/ggml-cpu-hbm.cpp
             ${WHISPER_LIB_DIR}/ggml/src/ggml-cpu/ggml-cpu-quants.c
             ${WHISPER_LIB_DIR}/ggml/src/ggml-cpu/ggml-cpu-traits.cpp
+            ${WHISPER_LIB_DIR}/ggml/src/ggml-cpu/unary-ops.cpp
+            ${WHISPER_LIB_DIR}/ggml/src/ggml-cpu/binary-ops.cpp
     )
 endif()
 
@@ -43,6 +45,8 @@ function(build_library target_name)
             SHARED
             ${SOURCE_FILES}
     )
+
+    target_compile_definitions(${target_name} PUBLIC GGML_USE_CPU)
 
     if (${target_name} STREQUAL "whisper_v8fp16_va")
         target_compile_options(${target_name} PRIVATE -march=armv8.2-a+fp16)
