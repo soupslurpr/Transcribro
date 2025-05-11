@@ -169,7 +169,6 @@ Java_com_whispercpp_whisper_WhisperLib_00024Companion_fullTranscribe(
     jfloat *audio_data_arr = (*env)->GetFloatArrayElements(env, audio_data, NULL);
     const jsize audio_data_length = (*env)->GetArrayLength(env, audio_data);
 
-    // The below adapted from the Objective-C iOS sample
     struct whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
     params.print_realtime = false;
     params.print_progress = false;
@@ -181,11 +180,8 @@ Java_com_whispercpp_whisper_WhisperLib_00024Companion_fullTranscribe(
     params.offset_ms = 0;
     params.no_context = true;
     params.single_segment = false;
-
-    // We changed these
     params.audio_ctx = audio_ctx;
-params.
-suppress_nst = true;
+    params.suppress_nst = true;
 
     whisper_reset_timings(context);
 
