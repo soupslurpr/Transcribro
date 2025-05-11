@@ -25,8 +25,9 @@ class WhisperContext private constructor(private var ptr: Long) {
         val numThreads = WhisperCpuConfig.preferredThreadCount
         Log.d(LOG_TAG, "Selecting $numThreads threads")
 
-        val audioCtx = // 1500 // setting it lower than this increases speed at the cost of accuracy
-            min((((((dataTime.toFloat() / 1000f) / 30f) * 1500f) + 512f) / 64f).roundToInt() * 64, 1500)
+        val audioCtx =
+            // 1500 // setting it lower than this increases speed at the potential cost of accuracy
+            min(((((dataTime.toFloat() / 1000f) / 30f) * 1500f) + 512f).toInt(), 1500)
 
         WhisperLib.fullTranscribe(ptr, numThreads, data, audioCtx)
         val textCount = WhisperLib.getTextSegmentCount(ptr)
