@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
-    <style name="Theme.transcribro" parent="Theme.Material3.DayNight.NoActionBar" />
+    <style name="Theme.Transcribro" parent="android:Theme.Material.Light.NoActionBar" />
 
     <style name="Theme.FloatingWindow" parent="@android:style/Theme.Dialog">
         <item name="android:windowIsTranslucent">true</item>
