@@ -169,7 +169,7 @@ Java_com_whispercpp_whisper_WhisperLib_00024Companion_fullTranscribe(
     jfloat *audio_data_arr = (*env)->GetFloatArrayElements(env, audio_data, NULL);
     const jsize audio_data_length = (*env)->GetArrayLength(env, audio_data);
 
-    struct whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+    struct whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_BEAM_SEARCH);
     params.print_realtime = false;
     params.print_progress = false;
     params.print_timestamps = false;
