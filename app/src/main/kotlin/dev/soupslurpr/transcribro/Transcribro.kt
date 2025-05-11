@@ -126,7 +126,8 @@ fun TranscribroApp(
             TopAppBar(
                 title = {
                     Text(
-                        text = stringResource(id = currentScreen.title)
+                        text = stringResource(id = currentScreen.title),
+                        maxLines = 1,
                     )
                 },
                 navigationIcon = {
