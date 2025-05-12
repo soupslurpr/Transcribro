@@ -79,7 +79,7 @@ fun StartScreen() {
 
     val isAprilFools = ((LocalDateTime.now().monthValue == 4) && (LocalDateTime.now().dayOfMonth == 1))
 
-    val randomValue = Random.nextInt(0, 15)
+    val randomValue = Random.nextInt(0, 24)
     val splashMessage = rememberSaveable {
         when (randomValue) {
             0 -> "Where every word counts, unless it's a typo."
@@ -88,16 +88,23 @@ fun StartScreen() {
             3 -> "Talk nerdy to me. I'll translate it to text."
             4 -> "Turning rambles into readable recaps with a tap."
             5 -> "Whisper, sing, or discuss the theory of relativity, I've got you covered."
-            6 -> "Where 'I didn't catch that' simply doesn't exist."
+            6 -> "Where \"I didn't catch that\" simply doesn't exist."
             7 -> "Speak of the devil, and I shall make him grammatically correct."
             8 -> "In a world of autocorrect fails, remains your faithful scribe."
-            9 -> "Fine-tuning your 'ums' and 'ahs'—catching them when they count but skimming over when they're just filler."
+            9 -> "Fine-tuning your \"ums\" and \"ahs\"—catching them when they count but skimming over when they're just filler."
             10 -> "Don't worry about the loud coffee shop. I listen to you, not the latte art."
             11 -> "Bridging the gap between brainwaves and text, one word at a time."
             12 -> "You do the talking; I handle the typing. Teamwork makes the dream work."
             13 -> "Where your voice gets VIP treatment, no velvet rope required."
-            14 -> "Who needs a pen pal when you've got me? Turning ramble into romance and gibberish into genius!"
-            15 -> "Unofficially competing for the title of 'World’s Most Patient Listener' since launch."
+            15 -> "Unofficially competing for the title of \"World’s Most Patient Listener\" since launch."
+            16 -> "Because typing is soooo 20th century."
+            17 -> "Quietly accurate, loudly private."
+            18 -> "Speech-to-text without the cloud circus."
+            19 -> "When speed matters and privacy matters more."
+            20 -> "Freeing you from thumb-cramps since 2024."
+            21 -> "Save the thumbs, use thy tongue."
+            22 -> "Doesn't work well with brainrot. Yet."
+            23 -> "Making sure \"once upon a time\" never becomes \"one upon a tim\"."
             else -> "Hey! Stop reading my source code without my consent! Just kidding, I'm open source :)"
         }
     }
