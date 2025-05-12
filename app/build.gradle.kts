@@ -95,7 +95,7 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     debugImplementation("androidx.compose.ui:ui-tooling")
 
-    implementation("androidx.datastore:datastore-preferences:1.1.2")
+    implementation("androidx.datastore:datastore-preferences:1.1.6")
     implementation("com.google.accompanist:accompanist-permissions:0.36.0")
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")
 }
