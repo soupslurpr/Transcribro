@@ -101,7 +101,7 @@ fun StartScreen() {
             17 -> "Quietly accurate, loudly private."
             18 -> "Speech-to-text without the cloud circus."
             19 -> "When speed matters and privacy matters more."
-            20 -> "Freeing you from thumb-cramps since 2024."
+            20 -> "Freeing you from thumb cramps since 2024."
             21 -> "Save the thumbs, use thy tongue."
             22 -> "Doesn't work well with brainrot. Yet."
             23 -> "Making sure \"once upon a time\" never becomes \"one upon a tim\"."
