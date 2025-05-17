@@ -96,6 +96,7 @@ fun StartScreen() {
             11 -> "Bridging the gap between brainwaves and text, one word at a time."
             12 -> "You do the talking; I handle the typing. Teamwork makes the dream work."
             13 -> "Where your voice gets VIP treatment, no velvet rope required."
+            14 -> "Transcribruh, Transcribruv, Transcribrah"
             15 -> "Unofficially competing for the title of \"World’s Most Patient Listener\" since launch."
             16 -> "Because typing is soooo 20th century."
             17 -> "Quietly accurate, loudly private."
