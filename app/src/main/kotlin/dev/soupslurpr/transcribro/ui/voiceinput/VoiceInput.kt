@@ -1,7 +1,6 @@
 package dev.soupslurpr.transcribro.ui.voiceinput
 
 import android.content.ComponentName
-import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration.ORIENTATION_PORTRAIT
 import android.inputmethodservice.InputMethodService
@@ -126,7 +125,7 @@ class VoiceInput : InputMethodService() {
         view.setContent {
             val context = LocalContext.current
 
-            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            val audioManager = context.getSystemService(AudioManager::class.java)
 
             val startedRecognitionMediaPlayer = MediaPlayer.create(context, R.raw.started_recognition)
 
