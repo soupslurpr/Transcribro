@@ -17,7 +17,7 @@ import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Configure component to receive long presses. Listens to provided [MutableInteractionSource]'s
- * PressInteraction.Press events to determine when a long press is being done.
+ * [PressInteraction.Press] events to determine when a long press is being done.
  */
 @Composable
 fun Modifier.longPressable(
