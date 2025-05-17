@@ -15,11 +15,12 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.SpeechRecognizer.createSpeechRecognizer
 import android.view.KeyEvent
-import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration.getKeyRepeatDelay
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.ExtractedTextRequest
 import android.view.inputmethod.InputConnection
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -71,12 +72,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
@@ -95,11 +93,13 @@ import dev.soupslurpr.transcribro.dataStore
 import dev.soupslurpr.transcribro.preferences.PreferencesViewModel
 import dev.soupslurpr.transcribro.recognitionservice.MainRecognitionService
 import dev.soupslurpr.transcribro.ui.reusablecomposables.ScreenLazyColumn
+import dev.soupslurpr.transcribro.ui.reusablecomposables.longPressableKey
 import dev.soupslurpr.transcribro.ui.theme.TranscribroTheme
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlin.time.Duration.Companion.milliseconds
 
 private var speechRecognizer: MutableState<SpeechRecognizer?> = mutableStateOf(null)
 
@@ -131,8 +131,6 @@ class VoiceInput : InputMethodService() {
             val startedRecognitionMediaPlayer = MediaPlayer.create(context, R.raw.started_recognition)
 
             val stoppedRecognitionMediaPlayer = MediaPlayer.create(context, R.raw.stopped_recognition)
-
-            val hapticFeedback = LocalHapticFeedback.current
 
             val preferencesViewModel: PreferencesViewModel = viewModel(
                 factory = PreferencesViewModel.PreferencesViewModelFactory(dataStore)
@@ -619,13 +617,10 @@ class VoiceInput : InputMethodService() {
                                                         .fillMaxWidth()
                                                         .weight(1f),
                                                 ) {
-                                                    val undoLongPressScope = rememberCoroutineScope()
-                                                    var undoLongPressJob by remember { mutableStateOf<Job?>(null) }
-
+                                                    val undoInteractionSource =
+                                                        remember { MutableInteractionSource() }
                                                     FilledTonalIconButton(
                                                         onClick = {
-                                                            undoLongPressJob?.cancel()
-
                                                             val downMetaState = KeyEvent.META_CTRL_ON
                                                             val upMetaState = 0
 
@@ -654,54 +649,40 @@ class VoiceInput : InputMethodService() {
                                                             .fillMaxHeight()
                                                             .fillMaxWidth()
                                                             .weight(1f)
-                                                            .pointerInteropFilter { motionEvent ->
-                                                                when (motionEvent.action) {
-                                                                    MotionEvent.ACTION_DOWN -> {
-                                                                        undoLongPressJob =
-                                                                            undoLongPressScope.launch {
-                                                                                delay(500)
-                                                                                hapticFeedback.performHapticFeedback(
-                                                                                    HapticFeedbackType.LongPress
-                                                                                )
-                                                                                while (isActive) {
-                                                                                    val downMetaState =
-                                                                                        KeyEvent.META_CTRL_ON
-                                                                                    val upMetaState =
-                                                                                        0
+                                                            .longPressableKey(
+                                                                interactionSource = undoInteractionSource,
+                                                                onLongPress = {
+                                                                    while (isActive) {
+                                                                        val downMetaState =
+                                                                            KeyEvent.META_CTRL_ON
+                                                                        val upMetaState = 0
 
-                                                                                    currentInputConnection.sendKeyEvent(
-                                                                                        KeyEvent(
-                                                                                            System.currentTimeMillis(),
-                                                                                            System.currentTimeMillis(),
-                                                                                            KeyEvent.ACTION_DOWN,
-                                                                                            KeyEvent.KEYCODE_Z,
-                                                                                            0,
-                                                                                            downMetaState
-                                                                                        )
-                                                                                    )
-                                                                                    currentInputConnection.sendKeyEvent(
-                                                                                        KeyEvent(
-                                                                                            System.currentTimeMillis(),
-                                                                                            System.currentTimeMillis(),
-                                                                                            KeyEvent.ACTION_UP,
-                                                                                            KeyEvent.KEYCODE_Z,
-                                                                                            0,
-                                                                                            upMetaState
-                                                                                        )
-                                                                                    )
-
-                                                                                    delay(50)
-                                                                                }
-                                                                            }
+                                                                        currentInputConnection.sendKeyEvent(
+                                                                            KeyEvent(
+                                                                                System.currentTimeMillis(),
+                                                                                System.currentTimeMillis(),
+                                                                                KeyEvent.ACTION_DOWN,
+                                                                                KeyEvent.KEYCODE_Z,
+                                                                                0,
+                                                                                downMetaState
+                                                                            )
+                                                                        )
+                                                                        currentInputConnection.sendKeyEvent(
+                                                                            KeyEvent(
+                                                                                System.currentTimeMillis(),
+                                                                                System.currentTimeMillis(),
+                                                                                KeyEvent.ACTION_UP,
+                                                                                KeyEvent.KEYCODE_Z,
+                                                                                0,
+                                                                                upMetaState
+                                                                            )
+                                                                        )
+                                                                        delay(getKeyRepeatDelay().milliseconds)
                                                                     }
-
-                                                                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                                                                        undoLongPressJob?.cancel()
-                                                                    }
-                                                                }
-                                                                false
-                                                            },
-                                                        shape = RoundedCornerShape(10.dp)
+                                                                },
+                                                            ),
+                                                        shape = RoundedCornerShape(10.dp),
+                                                        interactionSource = undoInteractionSource,
                                                     ) {
                                                         Icon(
                                                             imageVector = Icons.AutoMirrored.Outlined.Undo,
@@ -711,13 +692,10 @@ class VoiceInput : InputMethodService() {
                                                     }
                                                     Spacer(modifier = Modifier.size(8.dp))
 
-                                                    val redoLongPressScope = rememberCoroutineScope()
-                                                    var redoLongPressJob by remember { mutableStateOf<Job?>(null) }
-
+                                                    val redoInteractionSource =
+                                                        remember { MutableInteractionSource() }
                                                     FilledTonalIconButton(
                                                         onClick = {
-                                                            redoLongPressJob?.cancel()
-
                                                             val downMetaState =
                                                                 KeyEvent.META_CTRL_ON or KeyEvent.META_SHIFT_ON
                                                             val upMetaState = 0
@@ -747,54 +725,41 @@ class VoiceInput : InputMethodService() {
                                                             .fillMaxHeight()
                                                             .fillMaxWidth()
                                                             .weight(1f)
-                                                            .pointerInteropFilter { motionEvent ->
-                                                                when (motionEvent.action) {
-                                                                    MotionEvent.ACTION_DOWN -> {
-                                                                        redoLongPressJob =
-                                                                            redoLongPressScope.launch {
-                                                                                delay(500)
-                                                                                hapticFeedback.performHapticFeedback(
-                                                                                    HapticFeedbackType.LongPress
-                                                                                )
-                                                                                while (isActive) {
-                                                                                    val downMetaState =
-                                                                                        KeyEvent.META_CTRL_ON or KeyEvent.META_SHIFT_ON
-                                                                                    val upMetaState =
-                                                                                        0
+                                                            .longPressableKey(
+                                                                interactionSource = redoInteractionSource,
+                                                                onLongPress = {
+                                                                    while (isActive) {
+                                                                        val downMetaState =
+                                                                            KeyEvent.META_CTRL_ON or KeyEvent.META_SHIFT_ON
+                                                                        val upMetaState =
+                                                                            0
 
-                                                                                    currentInputConnection.sendKeyEvent(
-                                                                                        KeyEvent(
-                                                                                            System.currentTimeMillis(),
-                                                                                            System.currentTimeMillis(),
-                                                                                            KeyEvent.ACTION_DOWN,
-                                                                                            KeyEvent.KEYCODE_Z,
-                                                                                            0,
-                                                                                            downMetaState
-                                                                                        )
-                                                                                    )
-                                                                                    currentInputConnection.sendKeyEvent(
-                                                                                        KeyEvent(
-                                                                                            System.currentTimeMillis(),
-                                                                                            System.currentTimeMillis(),
-                                                                                            KeyEvent.ACTION_UP,
-                                                                                            KeyEvent.KEYCODE_Z,
-                                                                                            0,
-                                                                                            upMetaState
-                                                                                        )
-                                                                                    )
-
-                                                                                    delay(50)
-                                                                                }
-                                                                            }
-                                                                    }
-
-                                                                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                                                                        redoLongPressJob?.cancel()
+                                                                        currentInputConnection.sendKeyEvent(
+                                                                            KeyEvent(
+                                                                                System.currentTimeMillis(),
+                                                                                System.currentTimeMillis(),
+                                                                                KeyEvent.ACTION_DOWN,
+                                                                                KeyEvent.KEYCODE_Z,
+                                                                                0,
+                                                                                downMetaState
+                                                                            )
+                                                                        )
+                                                                        currentInputConnection.sendKeyEvent(
+                                                                            KeyEvent(
+                                                                                System.currentTimeMillis(),
+                                                                                System.currentTimeMillis(),
+                                                                                KeyEvent.ACTION_UP,
+                                                                                KeyEvent.KEYCODE_Z,
+                                                                                0,
+                                                                                upMetaState
+                                                                            )
+                                                                        )
+                                                                        delay(getKeyRepeatDelay().milliseconds)
                                                                     }
                                                                 }
-                                                                false
-                                                            },
-                                                        shape = RoundedCornerShape(10.dp)
+                                                            ),
+                                                        shape = RoundedCornerShape(10.dp),
+                                                        interactionSource = redoInteractionSource
                                                     ) {
                                                         Icon(
                                                             imageVector = Icons.AutoMirrored.Outlined.Redo,
@@ -811,13 +776,10 @@ class VoiceInput : InputMethodService() {
                                                     .fillMaxWidth()
                                                     .weight(1f)
                                             ) {
-                                                val backspaceLongPressScope = rememberCoroutineScope()
-                                                var backspaceLongPressJob by remember { mutableStateOf<Job?>(null) }
-
+                                                val backspaceInteractionSource =
+                                                    remember { MutableInteractionSource() }
                                                 FilledTonalIconButton(
                                                     onClick = {
-                                                        backspaceLongPressJob?.cancel()
-
                                                         val selectedText =
                                                             currentInputConnection.getSelectedText(0)
                                                         if (selectedText.isNullOrEmpty()) {
@@ -830,44 +792,23 @@ class VoiceInput : InputMethodService() {
                                                         .fillMaxHeight()
                                                         .fillMaxWidth()
                                                         .weight(1f)
-                                                        .pointerInteropFilter { motionEvent ->
-                                                            when (motionEvent.action) {
-                                                                MotionEvent.ACTION_DOWN -> {
-                                                                    backspaceLongPressJob =
-                                                                        backspaceLongPressScope.launch {
-                                                                            delay(500)
-                                                                            hapticFeedback.performHapticFeedback(
-                                                                                HapticFeedbackType.LongPress
-                                                                            )
-                                                                            while (isActive) {
-                                                                                val selectedText =
-                                                                                    currentInputConnection.getSelectedText(
-                                                                                        0
-                                                                                    )
-                                                                                if (selectedText.isNullOrEmpty()) {
-                                                                                    currentInputConnection.deleteSurroundingText(
-                                                                                        1,
-                                                                                        0
-                                                                                    )
-                                                                                } else {
-                                                                                    currentInputConnection.commitText(
-                                                                                        "",
-                                                                                        1
-                                                                                    )
-                                                                                }
-
-                                                                                delay(50)
-                                                                            }
-                                                                        }
+                                                        .longPressableKey(
+                                                            interactionSource = backspaceInteractionSource,
+                                                            onLongPress = {
+                                                                while (isActive) {
+                                                                    val selectedText =
+                                                                        currentInputConnection.getSelectedText(0)
+                                                                    if (selectedText.isNullOrEmpty()) {
+                                                                        currentInputConnection.deleteSurroundingText(1, 0)
+                                                                    } else {
+                                                                        currentInputConnection.commitText("", 1)
+                                                                    }
+                                                                    delay(getKeyRepeatDelay().milliseconds)
                                                                 }
-
-                                                                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                                                                    backspaceLongPressJob?.cancel()
-                                                                }
-                                                            }
-                                                            false
-                                                        },
-                                                    shape = RoundedCornerShape(10.dp)
+                                                            },
+                                                        ),
+                                                    shape = RoundedCornerShape(10.dp),
+                                                    interactionSource = backspaceInteractionSource,
                                                 ) {
                                                     Icon(
                                                         imageVector = Icons.AutoMirrored.Outlined.Backspace,
