@@ -1,5 +1,6 @@
 package dev.soupslurpr.transcribro.ui.reusablecomposables
 
+import android.view.ViewConfiguration.getKeyRepeatTimeout
 import android.view.ViewConfiguration.getLongPressTimeout
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.PressInteraction
@@ -42,4 +43,22 @@ fun Modifier.longPressable(
         }
     }
     return this
+}
+
+/**
+ * [longPressable] with defaults adjusted for keys.
+ */
+@Composable
+fun Modifier.longPressableKey(
+    interactionSource: MutableInteractionSource,
+    onLongPress: suspend CoroutineScope.() -> Unit,
+    longPressTimeout: Duration = getKeyRepeatTimeout().milliseconds,
+    hapticFeedbackEnabled: Boolean = true,
+): Modifier {
+    return this.longPressable(
+        interactionSource = interactionSource,
+        onLongPress = onLongPress,
+        longPressTimeout = longPressTimeout,
+        hapticFeedbackEnabled = hapticFeedbackEnabled,
+    )
 }
