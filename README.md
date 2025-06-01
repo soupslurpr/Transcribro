@@ -55,12 +55,6 @@ support their work on Transcribro and their other open source projects. Thank yo
 
 The [Monero](https://www.getmonero.org/) address and also a QR code can be found in the app's Donate screen.
 
-## Branding
-
-You may not use the name "Transcribro", a name that includes "Transcribro", and the app icon in a derivative work that
-has published builds.\
-This is to prevent confusion of which is the official Transcribro.
-
 ## Screenshots
 
 <img src="/Screenshot_20250214-223133.png" alt="Screenshot of the keyboard UI, focused on the search bar of Vanadium's incognito tab." width="250">
