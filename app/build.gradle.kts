@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "dev.soupslurpr.transcribro"
-    compileSdk = 35
+    compileSdk = 36
     buildToolsVersion = "36.0.0"
     ndkVersion = "27.2.12479018"
 
