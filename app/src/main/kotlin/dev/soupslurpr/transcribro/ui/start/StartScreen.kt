@@ -201,7 +201,7 @@ fun StartScreen() {
                             context.startActivity(intent)
                         }
                     ) {
-                        Text("Open settings (Navigate to System > Languages > Voice input)")
+                        Text("Open settings (Navigate to System > Language & region > Speech > Voice input)")
                     }
                     Spacer(Modifier.padding(8.dp))
                     Text("If you already selected Transcribro as the voice input app, please ignore this.")
