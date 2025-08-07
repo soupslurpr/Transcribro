@@ -14,8 +14,8 @@ android {
         applicationId = "dev.soupslurpr.transcribro"
         minSdk = 29
         targetSdk = 36
-        versionCode = 6
-        versionName = "0.3.1"
+        versionCode = 7
+        versionName = versionCode.toString()
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
