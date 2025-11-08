@@ -52,6 +52,7 @@ import androidx.compose.material3.FilledIconToggleButton
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.Scaffold
@@ -71,6 +72,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -553,7 +555,10 @@ class VoiceInput : InputMethodService() {
                                                     .fillMaxWidth()
                                                     .weight(0.75f)
                                                     .padding(top = 2.dp),
-                                                shape = RoundedCornerShape(10.dp)
+                                                shape = RoundedCornerShape(10.dp),
+                                                colors = IconButtonDefaults.filledIconToggleButtonColors(
+                                                    checkedContainerColor = Color.Red
+                                                )
                                             ) {
                                                 Icon(
                                                     imageVector = Icons.Outlined.Mic,
