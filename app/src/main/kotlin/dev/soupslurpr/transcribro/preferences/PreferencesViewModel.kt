@@ -81,6 +81,38 @@ class PreferencesViewModel(private val dataStore: DataStore<Preferences>) : View
                                 .first] ?: uiState.value
                                 .autoSendTranscription.second.value
                         )
+                    ),
+                    languageOverride = Pair(
+                        uiState.value.languageOverride.first,
+                        mutableStateOf(
+                            preferences[uiState.value.languageOverride
+                                .first] ?: uiState.value
+                                .languageOverride.second.value
+                        )
+                    ),
+                    model = Pair(
+                        uiState.value.model.first,
+                        mutableStateOf(
+                            preferences[uiState.value.model
+                                .first] ?: uiState.value
+                                .model.second.value
+                        )
+                    ),
+                    customModelPath = Pair(
+                        uiState.value.customModelPath.first,
+                        mutableStateOf(
+                            preferences[uiState.value.customModelPath
+                                .first] ?: uiState.value
+                                .customModelPath.second.value
+                        )
+                    ),
+                    customModelName = Pair(
+                        uiState.value.customModelName.first,
+                        mutableStateOf(
+                            preferences[uiState.value.customModelName
+                                .first] ?: uiState.value
+                                .customModelName.second.value
+                        )
                     )
                 )
             }
@@ -91,6 +123,17 @@ class PreferencesViewModel(private val dataStore: DataStore<Preferences>) : View
      * Set a preference to a value and save to Preferences DataStore
      */
     fun setPreference(key: Preferences.Key<Boolean>, value: Boolean) {
+        viewModelScope.launch {
+            dataStore.edit { preferences ->
+                preferences[key] = value
+            }
+        }
+    }
+
+    /**
+     * Set a String preference to a value and save to Preferences DataStore
+     */
+    fun setPreference(key: Preferences.Key<String>, value: String) {
         viewModelScope.launch {
             dataStore.edit { preferences ->
                 preferences[key] = value

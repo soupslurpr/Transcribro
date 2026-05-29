@@ -1,3 +1,5 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -14,7 +16,7 @@ android {
         applicationId = "dev.soupslurpr.transcribro"
         minSdk = 29
         targetSdk = 36
-        versionCode = 7
+        versionCode = 8
         versionName = versionCode.toString()
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -46,6 +48,10 @@ android {
     androidResources {
         generateLocaleConfig = true
         localeFilters += listOf("en")
+        // Store Whisper model files (.bin) uncompressed: it lets them be read/mmapped
+        // directly, and avoids the release-build "compressAssets" step choking on a
+        // placeholder/empty .bin asset.
+        noCompress += "bin"
     }
     buildTypes {
         release {
@@ -73,6 +79,12 @@ android {
         includeInApk = false
         // Disables dependency metadata when building Android App Bundles.
         includeInBundle = false
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget = JvmTarget.JVM_17
     }
 }
 

@@ -20,7 +20,19 @@ class WhisperContext private constructor(private var ptr: Long) {
         Executors.newSingleThreadExecutor().asCoroutineDispatcher()
     )
 
-    suspend fun transcribeData(data: FloatArray, dataTime: Long): String = withContext(scope.coroutineContext) {
+    /**
+     * Transcribe [data] with the given [language].
+     *
+     * [language] should be an ISO 639-1 code understood by the multilingual Whisper
+     * model (for example "en", "de", "es"), or "auto" to let Whisper detect the
+     * spoken language automatically. Passing a specific language requires a
+     * multilingual model; English-only (".en") models only support "en".
+     */
+    suspend fun transcribeData(
+        data: FloatArray,
+        dataTime: Long,
+        language: String = "auto"
+    ): String = withContext(scope.coroutineContext) {
         require(ptr != 0L)
         val numThreads = WhisperCpuConfig.preferredThreadCount
         Log.d(LOG_TAG, "Selecting $numThreads threads")
@@ -29,7 +41,7 @@ class WhisperContext private constructor(private var ptr: Long) {
             // 1500 // setting it lower than this increases speed at the potential cost of accuracy
             min(((((dataTime.toFloat() / 1000f) / 30f) * 1500f) + 512f).toInt(), 1500)
 
-        WhisperLib.fullTranscribe(ptr, numThreads, data, audioCtx)
+        WhisperLib.fullTranscribe(ptr, numThreads, data, audioCtx, language)
         val textCount = WhisperLib.getTextSegmentCount(ptr)
         return@withContext buildString {
             for (i in 0 until textCount) {
@@ -131,7 +143,13 @@ private class WhisperLib {
         external fun initContextFromAsset(assetManager: AssetManager, assetPath: String): Long
         external fun initContext(modelPath: String): Long
         external fun freeContext(contextPtr: Long)
-        external fun fullTranscribe(contextPtr: Long, numThreads: Int, audioData: FloatArray, audioCtx: Int)
+        external fun fullTranscribe(
+            contextPtr: Long,
+            numThreads: Int,
+            audioData: FloatArray,
+            audioCtx: Int,
+            language: String
+        )
         external fun getTextSegmentCount(contextPtr: Long): Int
         external fun getTextSegment(contextPtr: Long, index: Int): String
         external fun getSystemInfo(): String

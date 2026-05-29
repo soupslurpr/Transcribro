@@ -3,6 +3,7 @@
 #include <android/asset_manager_jni.h>
 #include <android/log.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <sys/sysinfo.h>
 #include <string.h>
 #include "whisper.h"
@@ -67,7 +68,7 @@ void inputStreamClose(void * ctx) {
 }
 
 JNIEXPORT jlong JNICALL
-Java_com_whispercppdemo_whisper_WhisperLib_00024Companion_initContextFromInputStream(
+Java_com_whispercpp_whisper_WhisperLib_00024Companion_initContextFromInputStream(
         JNIEnv *env, jobject thiz, jobject input_stream) {
     UNUSED(thiz);
 
@@ -91,7 +92,7 @@ Java_com_whispercppdemo_whisper_WhisperLib_00024Companion_initContextFromInputSt
 
     loader.eof(loader.context);
 
-    context = whisper_init(&loader);
+    context = whisper_init_with_params(&loader, whisper_context_default_params());
     return (jlong) context;
 }
 
@@ -163,11 +164,26 @@ Java_com_whispercpp_whisper_WhisperLib_00024Companion_freeContext(
 
 JNIEXPORT void JNICALL
 Java_com_whispercpp_whisper_WhisperLib_00024Companion_fullTranscribe(
-        JNIEnv *env, jobject thiz, jlong context_ptr, jint num_threads, jfloatArray audio_data, jint audio_ctx) {
+        JNIEnv *env, jobject thiz, jlong context_ptr, jint num_threads, jfloatArray audio_data,
+        jint audio_ctx, jstring language) {
     UNUSED(thiz);
     struct whisper_context *context = (struct whisper_context *) context_ptr;
     jfloat *audio_data_arr = (*env)->GetFloatArrayElements(env, audio_data, NULL);
     const jsize audio_data_length = (*env)->GetArrayLength(env, audio_data);
+
+    // Resolve the requested transcription language. A null/empty string or the
+    // special value "auto" enables Whisper's built-in language detection, which
+    // requires a multilingual model. The pointer obtained here must stay valid
+    // for the whole whisper_full call, so it is only released afterwards.
+    const char *language_chars = NULL;
+    bool detect_language = true;
+    if (language != NULL) {
+        language_chars = (*env)->GetStringUTFChars(env, language, NULL);
+        if (language_chars != NULL && language_chars[0] != '\0'
+                && strcmp(language_chars, "auto") != 0) {
+            detect_language = false;
+        }
+    }
 
     struct whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_BEAM_SEARCH);
     params.print_realtime = false;
@@ -175,23 +191,39 @@ Java_com_whispercpp_whisper_WhisperLib_00024Companion_fullTranscribe(
     params.print_timestamps = false;
     params.print_special = false;
     params.translate = false;
-    params.language = "en";
+    // Setting language to "auto" is the supported way to make whisper.cpp detect the spoken
+    // language and then transcribe it. We deliberately do NOT also set
+    // params.detect_language = true: in some whisper.cpp builds that flag switches to a
+    // "detect only" mode that returns no transcript, which is why auto-detect produced empty
+    // output. The "auto" sentinel alone triggers detection followed by transcription.
+    params.language = detect_language ? "auto" : language_chars;
+    params.detect_language = false;
     params.n_threads = num_threads;
     params.offset_ms = 0;
     params.no_context = true;
     params.single_segment = false;
-    params.audio_ctx = audio_ctx;
+    // Language auto-detection needs the full encoder context to be reliable, so don't shrink
+    // audio_ctx in that case (0 == use the model default of 1500).
+    params.audio_ctx = detect_language ? 0 : audio_ctx;
     params.suppress_nst = true;
 
     whisper_reset_timings(context);
 
-    LOGI("About to run whisper_full");
+    LOGI("About to run whisper_full (language='%s', detect=%d, audio_ctx=%d)",
+         params.language, detect_language, params.audio_ctx);
     if (whisper_full(context, params, audio_data_arr, audio_data_length) != 0) {
         LOGI("Failed to run the model");
     } else {
         whisper_print_timings(context);
+        const int detected_lang_id = whisper_full_lang_id(context);
+        if (detected_lang_id >= 0) {
+            LOGI("whisper used language: %s", whisper_lang_str(detected_lang_id));
+        }
     }
     (*env)->ReleaseFloatArrayElements(env, audio_data, audio_data_arr, JNI_ABORT);
+    if (language_chars != NULL) {
+        (*env)->ReleaseStringUTFChars(env, language, language_chars);
+    }
 }
 
 JNIEXPORT jint JNICALL

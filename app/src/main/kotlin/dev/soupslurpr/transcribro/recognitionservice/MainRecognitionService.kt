@@ -2,6 +2,7 @@ package dev.soupslurpr.transcribro.recognitionservice
 
 import android.content.ContextParams
 import android.content.Intent
+import java.io.File
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.os.Build
@@ -20,7 +21,9 @@ import dev.soupslurpr.transcribro.recognitionservice.silerovad.SileroVadDetector
 import dev.soupslurpr.transcribro.recognitionservice.silerovad.SileroVadLocalDataSource
 import dev.soupslurpr.transcribro.recognitionservice.silerovad.SileroVadRepository
 import dev.soupslurpr.transcribro.recognitionservice.whisper.WhisperApi
+import dev.soupslurpr.transcribro.recognitionservice.whisper.WhisperLanguage
 import dev.soupslurpr.transcribro.recognitionservice.whisper.WhisperLocalDataSource
+import dev.soupslurpr.transcribro.recognitionservice.whisper.WhisperModel
 import dev.soupslurpr.transcribro.recognitionservice.whisper.WhisperRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -41,6 +44,7 @@ private data class Transcription(
 class MainRecognitionService : RecognitionService() {
     companion object {
         const val EXTRA_AUTO_STOP = "dev.soupslurpr.transcribro.EXTRA_AUTO_STOP"
+        const val EXTRA_MODEL = "dev.soupslurpr.transcribro.EXTRA_MODEL"
     }
 
     private val recordAndTranscribeScope = CoroutineScope(Dispatchers.IO)
@@ -64,11 +68,19 @@ class MainRecognitionService : RecognitionService() {
             WhisperLocalDataSource(
                 whisperApi =
                 object : WhisperApi {
-                    override fun getWhisperContext(): WhisperContext {
-                        return WhisperContext.createContextFromAsset(
-                            application.assets,
-                            "models/whisper/ggml-model-whisper-tiny.en-q8_0.bin"
-                        )
+                    override fun getWhisperContext(modelSpec: String): WhisperContext {
+                        // A custom model is one imported from the file system: it has been
+                        // copied into app-internal storage, so it is loaded directly from that
+                        // file path. Otherwise it is a bundled asset path. Either way the model
+                        // must be multilingual for language selection / auto-detection to work.
+                        return if (WhisperModel.isCustom(modelSpec)) {
+                            WhisperContext.createContextFromFile(modelSpec)
+                        } else {
+                            WhisperContext.createContextFromAsset(
+                                application.assets,
+                                modelSpec
+                            )
+                        }
                     }
                 },
                 ioDispatcher = Dispatchers.IO,
@@ -110,6 +122,25 @@ class MainRecognitionService : RecognitionService() {
         val autoStopRecognition = recognizerIntent?.extras?.getBoolean(EXTRA_AUTO_STOP) ?: true
         val isPartialResults = recognizerIntent?.extras?.getBoolean(RecognizerIntent.EXTRA_PARTIAL_RESULTS)
         val speechStartPadMs = 24000
+
+        // Derive the transcription language from the standard EXTRA_LANGUAGE extra (a BCP-47
+        // tag). The Voice Input keyboard sets this from its currently selected keyboard
+        // language; other callers may set it too. Unknown/missing -> Whisper auto-detect.
+        val transcriptionLanguage = WhisperLanguage.fromLanguageTag(
+            recognizerIntent?.extras?.getString(RecognizerIntent.EXTRA_LANGUAGE)
+        )
+
+        // Which model to transcribe with: a bundled asset path or an absolute file path of an
+        // imported model. Blank/missing -> default bundled model. If a previously imported
+        // model file no longer exists (e.g. cleared storage), fall back to the default instead
+        // of crashing.
+        val requestedModel = recognizerIntent?.extras?.getString(EXTRA_MODEL)?.takeIf { it.isNotBlank() }
+        val modelSpec = when {
+            requestedModel == null -> WhisperModel.DEFAULT.assetPath
+            WhisperModel.isCustom(requestedModel) && !File(requestedModel).exists() ->
+                WhisperModel.DEFAULT.assetPath
+            else -> requestedModel
+        }
 
         if (recordAndTranscribeJob?.isActive == true) {
             listener?.error(SpeechRecognizer.ERROR_RECOGNIZER_BUSY)
@@ -305,6 +336,8 @@ class MainRecognitionService : RecognitionService() {
                                         ))..((transcription.end!!.toInt()).coerceAtMost(transcription.audioData.size - 1))
                                     )
                                         .toShortArray(),
+                                    transcriptionLanguage,
+                                    modelSpec,
                                 )
 
                             transcription.text = transcriptionText
@@ -379,6 +412,8 @@ class MainRecognitionService : RecognitionService() {
                                                         ))..((transcription.end!!.toInt()).coerceAtMost(transcription.audioData.size - 1))
                                                     )
                                                         .toShortArray(),
+                                                    transcriptionLanguage,
+                                                    modelSpec,
                                                 )
 
                                             totalTranscriptionTime += currentTimeMillis() - timeBeforeTranscription

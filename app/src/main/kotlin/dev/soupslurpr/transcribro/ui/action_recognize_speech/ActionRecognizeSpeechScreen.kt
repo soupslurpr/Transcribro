@@ -33,6 +33,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
+import dev.soupslurpr.transcribro.dataStore
+import dev.soupslurpr.transcribro.preferences.PreferencesViewModel
 import dev.soupslurpr.transcribro.recognitionservice.MainRecognitionService
 
 @OptIn(ExperimentalPermissionsApi::class)
@@ -45,6 +47,28 @@ fun ActionRecognizeSpeechScreen(
     val speechRecognizerUiState by speechRecognizerViewModel.uiState.collectAsState()
 
     val context = LocalContext.current
+
+    val preferencesViewModel: PreferencesViewModel = viewModel(
+        factory = PreferencesViewModel.PreferencesViewModelFactory(LocalContext.current.dataStore)
+    )
+
+    val preferencesUiState by preferencesViewModel.uiState.collectAsState()
+
+    // Build the start-listening intent applying the transcription-language override:
+    // either AUTO (auto-detect) or a specific Whisper language code chosen in settings, plus
+    // the selected model (asset path) for the service to load.
+    fun makeStartListeningIntent(): Intent {
+        return Intent().apply {
+            putExtra(
+                RecognizerIntent.EXTRA_LANGUAGE,
+                preferencesUiState.languageOverride.second.value
+            )
+            putExtra(
+                MainRecognitionService.EXTRA_MODEL,
+                preferencesUiState.model.second.value
+            )
+        }
+    }
 
     val microphonePermissionState = rememberPermissionState(
         Manifest.permission.RECORD_AUDIO
@@ -159,7 +183,7 @@ fun ActionRecognizeSpeechScreen(
     LaunchedEffect(microphonePermissionState.status.isGranted) {
         if (!speechRecognizerUiState.isRecognizing && (!alreadyRequestedMicrophonePermissionOnce || microphonePermissionState.status.isGranted)) {
             speechRecognizerViewModel.startListening(
-                Intent()
+                makeStartListeningIntent()
             )
         }
     }
@@ -171,7 +195,7 @@ fun ActionRecognizeSpeechScreen(
                 speechRecognizerViewModel.stopListening()
             } else {
                 speechRecognizerViewModel.startListening(
-                    Intent()
+                    makeStartListeningIntent()
                 )
             }
         },

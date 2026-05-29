@@ -438,7 +438,9 @@ class VoiceInput : InputMethodService() {
                                             if (autoStartRecognition) {
                                                 speechRecognizer.value!!.startListening(
                                                     getStartListeningIntent(
-                                                        autoStopRecognition
+                                                        autoStopRecognition,
+                                                        preferencesUiState.languageOverride.second.value,
+                                                        preferencesUiState.model.second.value
                                                     )
                                                 )
                                             }
@@ -543,7 +545,9 @@ class VoiceInput : InputMethodService() {
                                                     } else {
                                                         speechRecognizer.value?.startListening(
                                                             getStartListeningIntent(
-                                                                autoStopRecognition
+                                                                autoStopRecognition,
+                                                                preferencesUiState.languageOverride.second.value,
+                                                                preferencesUiState.model.second.value
                                                             )
                                                         )
                                                     }
@@ -945,10 +949,16 @@ class VoiceInput : InputMethodService() {
         speechRecognizer.value = null
     }
 
-    private fun getStartListeningIntent(longForm: Boolean): Intent {
+    private fun getStartListeningIntent(longForm: Boolean, languageOverride: String, model: String): Intent {
         return Intent().apply {
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
             putExtra(MainRecognitionService.EXTRA_AUTO_STOP, longForm)
+            // Hand the transcription language to the recognition service via the standard
+            // EXTRA_LANGUAGE contract. The value is either AUTO (auto-detect) or a specific
+            // Whisper language code chosen in settings.
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, languageOverride)
+            // Selected model (asset path) for the service to load.
+            putExtra(MainRecognitionService.EXTRA_MODEL, model)
         }
     }
 }

@@ -36,4 +36,24 @@
     <string name="auto_start_recognition_setting_description">Automatically start recognition when switching from another input method</string>
     <string name="auto_send_transcription_setting_name">Auto-Send Transcription</string>
     <string name="auto_send_transcription_setting_description">Automatically send transcription when speech stops being detected</string>
+    <string name="language_setting_category">Language</string>
+    <string name="language_setting_name">Transcription language</string>
+    <string name="language_setting_description">Currently: %1$s</string>
+    <string name="language_auto_detect">Auto-detect</string>
+    <string name="model_setting_category">Model</string>
+    <string name="model_setting_name">Transcription model</string>
+    <string name="model_setting_description">Currently: %1$s</string>
+    <string name="model_custom_unnamed">Custom model</string>
+    <string name="model_choose_file">Choose model file…</string>
+    <string name="model_delete_imported">Delete imported model</string>
+    <string name="model_importing">Importing model…</string>
+    <string name="model_link_setting_name">Model download links</string>
+    <string name="model_link_setting_description">Get a download URL to fetch a model in your browser</string>
+    <string name="model_disk">%1$s on disk</string>
+    <string name="model_mem">%1$s RAM</string>
+    <string name="model_size_unknown">Size unknown</string>
+    <string name="model_size_note">Disk sizes are the actual download sizes; memory is the approximate requirement for each size class.</string>
+    <string name="copy">Copy</string>
+    <string name="open_in_browser">Open in browser</string>
+    <string name="close">Close</string>
 </resources>
