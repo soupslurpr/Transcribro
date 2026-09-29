@@ -45,10 +45,6 @@ Testing rooms.
 Check [CONTRIBUTING.md](https://github.com/soupslurpr/Transcribro/blob/master/CONTRIBUTING.md) for things to know
 if you want to contribute.
 
-## Donation
-
-Thank you to everyone who donated.
-
 ## Screenshots
 
 <img src="/Screenshot_20250214-223133.png" alt="Screenshot of the keyboard UI, focused on the search bar of Vanadium's incognito tab." width="250">
