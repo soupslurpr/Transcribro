@@ -37,6 +37,12 @@ data class PreferencesUiState(
         mutableStateOf(true)
     ),
 
+    /** Keep the visible keyboard's screen awake only while listening. */
+    val keepScreenAwakeWhileListening: Pair<Preferences.Key<Boolean>, MutableState<Boolean>> = Pair(
+        booleanPreferencesKey("KEEP_SCREEN_AWAKE_WHILE_LISTENING"),
+        mutableStateOf(false)
+    ),
+
     /** Whether to automatically send transcription when speech stops being detected. */
     val autoSendTranscription: Pair<Preferences.Key<Boolean>, MutableState<Boolean>> = Pair(
         (booleanPreferencesKey("AUTO_SEND_TRANSCRIPTION")),
