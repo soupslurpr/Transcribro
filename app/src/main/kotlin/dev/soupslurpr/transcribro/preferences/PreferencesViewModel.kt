@@ -74,6 +74,12 @@ class PreferencesViewModel(private val dataStore: DataStore<Preferences>) : View
                                 .autoStartRecognition.second.value
                         )
                     ),
+                    keepScreenAwakeWhileListening = Pair(
+                        currentState.keepScreenAwakeWhileListening.first,
+                        mutableStateOf(
+                            preferences[currentState.keepScreenAwakeWhileListening.first] ?: false
+                        )
+                    ),
                     autoSendTranscription = Pair(
                         uiState.value.autoSendTranscription.first,
                         mutableStateOf(

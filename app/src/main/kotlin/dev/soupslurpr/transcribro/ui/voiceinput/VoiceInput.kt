@@ -15,6 +15,7 @@ import android.speech.SpeechRecognizer
 import android.speech.SpeechRecognizer.createSpeechRecognizer
 import android.view.KeyEvent
 import android.view.View
+import android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
 import android.view.ViewConfiguration.getKeyRepeatDelay
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.ExtractedTextRequest
@@ -62,6 +63,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -111,6 +113,45 @@ private var isSpeaking by mutableStateOf(false)
 class VoiceInput : InputMethodService() {
     private val voiceInputLifecycleOwner = VoiceInputLifecycleOwner()
 
+    private var keepScreenAwakeWhileListening = false
+    private var inputViewActive = false
+    private var isListening = false
+    private var autoStopListening = false
+
+    private fun updateKeepScreenOn() {
+        window?.window?.let { imeWindow ->
+            if (keepScreenAwakeWhileListening && inputViewActive && isListening) {
+                imeWindow.addFlags(FLAG_KEEP_SCREEN_ON)
+            } else {
+                imeWindow.clearFlags(FLAG_KEEP_SCREEN_ON)
+            }
+        }
+    }
+
+    private fun setListening(listening: Boolean) {
+        isListening = listening
+        updateKeepScreenOn()
+    }
+
+    private fun startRecognition(autoStop: Boolean) {
+        if (!inputViewActive) return
+        val recognizer = speechRecognizer.value ?: return
+        autoStopListening = autoStop
+        setListening(true)
+        try {
+            recognizer.startListening(getStartListeningIntent(autoStop))
+        } catch (e: RuntimeException) {
+            setListening(false)
+            throw e
+        }
+    }
+
+    private fun cancelRecognition() {
+        setListening(false)
+        isRecognizing = false
+        speechRecognizer.value?.cancel()
+    }
+
     override fun onCreate() {
         super.onCreate()
         voiceInputLifecycleOwner.onCreate()
@@ -136,6 +177,12 @@ class VoiceInput : InputMethodService() {
             )
 
             val preferencesUiState by preferencesViewModel.uiState.collectAsState()
+
+            SideEffect {
+                keepScreenAwakeWhileListening =
+                    preferencesUiState.keepScreenAwakeWhileListening.second.value
+                updateKeepScreenOn()
+            }
 
             val acceptedPrivacyPolicyAndLicense = preferencesUiState.acceptedPrivacyPolicyAndLicense.second.value
 
@@ -267,10 +314,12 @@ class VoiceInput : InputMethodService() {
                                                 }
 
                                                 override fun onEndOfSpeech() {
+                                                    if (autoStopListening) setListening(false)
                                                     isSpeaking = false
                                                 }
 
                                                 override fun onError(error: Int) {
+                                                    setListening(false)
                                                     when (error) {
                                                         SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> {
                                                             showInsufficientPermissionsError = true
@@ -291,6 +340,7 @@ class VoiceInput : InputMethodService() {
                                                 }
 
                                                 override fun onResults(results: Bundle?) {
+                                                    setListening(false)
                                                     isRecognizing = false
 
                                                     if (audioManager.ringerMode == AudioManager.RINGER_MODE_NORMAL) {
@@ -436,11 +486,7 @@ class VoiceInput : InputMethodService() {
                                             })
 
                                             if (autoStartRecognition) {
-                                                speechRecognizer.value!!.startListening(
-                                                    getStartListeningIntent(
-                                                        autoStopRecognition
-                                                    )
-                                                )
+                                                startRecognition(autoStopRecognition)
                                             }
                                         }
                                     }
@@ -474,8 +520,7 @@ class VoiceInput : InputMethodService() {
                                                 ) {
                                                     OutlinedIconButton(
                                                         onClick = {
-                                                            speechRecognizer.value?.cancel()
-                                                            isRecognizing = false
+                                                            cancelRecognition()
 
                                                             val intent = context.packageManager
                                                                 .getLaunchIntentForPackage(context.packageName)!!
@@ -499,8 +544,7 @@ class VoiceInput : InputMethodService() {
                                                     Spacer(modifier = Modifier.size(8.dp))
                                                     FilledTonalIconButton(
                                                         onClick = {
-                                                            speechRecognizer.value?.cancel()
-                                                            isRecognizing = false
+                                                            cancelRecognition()
                                                             switchToPreviousInputMethod()
                                                         },
                                                         modifier = Modifier
@@ -519,8 +563,7 @@ class VoiceInput : InputMethodService() {
                                                 OutlinedButton(
                                                     onClick = {
                                                         if (isRecognizing) {
-                                                            speechRecognizer.value?.cancel()
-                                                            isRecognizing = false
+                                                            cancelRecognition()
                                                         }
                                                     },
                                                     modifier = Modifier
@@ -539,13 +582,10 @@ class VoiceInput : InputMethodService() {
                                                 checked = isRecognizing,
                                                 onCheckedChange = {
                                                     if (isRecognizing) {
+                                                        setListening(false)
                                                         speechRecognizer.value?.stopListening()
                                                     } else {
-                                                        speechRecognizer.value?.startListening(
-                                                            getStartListeningIntent(
-                                                                autoStopRecognition
-                                                            )
-                                                        )
+                                                        startRecognition(autoStopRecognition)
                                                     }
                                                 },
                                                 modifier = Modifier
@@ -924,19 +964,31 @@ class VoiceInput : InputMethodService() {
     }
 
     override fun onStartInputView(editorInfo: EditorInfo?, restarting: Boolean) {
+        inputViewActive = true
+        updateKeepScreenOn()
         voiceInputLifecycleOwner.onResume()
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
+        inputViewActive = false
+        cancelRecognition()
         voiceInputLifecycleOwner.onPause()
     }
 
+    override fun onWindowHidden() {
+        inputViewActive = false
+        cancelRecognition()
+        super.onWindowHidden()
+    }
+
     override fun onFinishInput() {
-        speechRecognizer.value?.cancel()
-        isRecognizing = false
+        inputViewActive = false
+        cancelRecognition()
     }
 
     override fun onDestroy() {
+        inputViewActive = false
+        setListening(false)
         super.onDestroy()
         voiceInputLifecycleOwner.onDestroy()
 

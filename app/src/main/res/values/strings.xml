@@ -28,6 +28,8 @@
     <string name="start">Start</string>
     <string name="auto_switch_to_previous_input_method_setting_name">Auto-Switch To Previous Input Method</string>
     <string name="voice_input_keyboard_setting_category">Voice Input Keyboard</string>
+    <string name="keep_screen_awake_while_listening_setting_name">Keep screen awake while listening</string>
+    <string name="keep_screen_awake_while_listening_setting_description">Prevent screen timeout while the keyboard is visible and listening. Normal timeout resumes when listening stops or the keyboard is dismissed.</string>
     <string name="auto_switch_to_previous_input_method_setting_description">Automatically switch to the previous
         input method when finished recognizing</string>
     <string name="auto_stop_recognition_setting_name">Auto-Stop Recognition</string>

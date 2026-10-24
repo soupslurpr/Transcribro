@@ -72,6 +72,17 @@ fun SettingsStartScreen(
             )
         }
         item {
+            val preference = preferencesUiState.keepScreenAwakeWhileListening
+            SettingsSwitchItem(
+                name = stringResource(R.string.keep_screen_awake_while_listening_setting_name),
+                description = stringResource(R.string.keep_screen_awake_while_listening_setting_description),
+                checked = preference.second.value,
+                onCheckedChange = {
+                    preferencesViewModel.setPreference(preference.first, it)
+                }
+            )
+        }
+        item {
             val preference = preferencesUiState.autoSwitchToPreviousInputMethod
             SettingsSwitchItem(
                 name = stringResource(id = R.string.auto_switch_to_previous_input_method_setting_name),
