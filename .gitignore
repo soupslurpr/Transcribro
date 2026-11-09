@@ -16,3 +16,6 @@ __pycache__/
 .cxx
 local.properties
 /app/release
+
+# Rust host tools (Gate 1 of the Kotlin+Rust rewrite)
+/tools/target/

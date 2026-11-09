@@ -3,14 +3,34 @@ plugins { id("com.android.library") }
 val nativeSources = layout.buildDirectory.dir("generated/native")
 val mediumAssets = layout.buildDirectory.dir("generated/medium-assets")
 val nativeCache = rootProject.layout.projectDirectory.dir(".gradle/native-inputs")
-val prepareScript = layout.projectDirectory.file("tools/prepare.py")
 val inputLock = layout.projectDirectory.file("native-inputs.lock.json")
+val prepareToolProject = rootProject.layout.projectDirectory.dir("tools")
+val prepareTool = prepareToolProject.file("target/release/transcribro-prepare")
+
+// Gate 1 of the Kotlin+Rust rewrite: prepare.py + import_model.py are
+// replaced by the Rust tool in /tools (byte-identical outputs; the Python
+// tools remain in the tree as the reference oracle until Gate 7).
+val buildPrepareTool = tasks.register<Exec>("buildPrepareTool") {
+    inputs.dir(prepareToolProject.dir("src"))
+    inputs.file(prepareToolProject.file("Cargo.toml"))
+    inputs.file(prepareToolProject.file("Cargo.lock"))
+    outputs.file(prepareTool)
+    val cargo = listOf(
+        File(System.getProperty("user.home"), ".cargo/bin/cargo"),
+        File("/usr/bin/cargo"),
+    ).firstOrNull { it.canExecute() } ?: File("cargo")
+    commandLine(
+        cargo, "build", "--release", "--locked",
+        "--manifest-path", prepareToolProject.file("Cargo.toml").asFile,
+    )
+}
 
 val prepareNativeSources = tasks.register<Exec>("prepareNativeSources") {
-    inputs.files(prepareScript, inputLock)
+    dependsOn(buildPrepareTool)
+    inputs.files(prepareTool, inputLock)
     outputs.dir(nativeSources)
     commandLine(
-        "python3", prepareScript.asFile, "sources", "--cache", nativeCache.asFile,
+        prepareTool.asFile, "sources", "--cache", nativeCache.asFile,
         "--output", nativeSources.get().asFile,
     )
     if (gradle.startParameter.isOffline) args("--offline")
@@ -19,7 +39,7 @@ val prepareNativeSources = tasks.register<Exec>("prepareNativeSources") {
 val prepareMediumModel = tasks.register<Exec>("prepareMediumModel") {
     dependsOn(prepareNativeSources)
     inputs.files(
-        prepareScript, inputLock, layout.projectDirectory.file("tools/import_model.py"),
+        prepareTool, inputLock,
         layout.projectDirectory.file("medium-model.json"),
         rootProject.layout.projectDirectory.file("docs/moonshine-model.json"),
         rootProject.layout.projectDirectory.file(
@@ -28,7 +48,7 @@ val prepareMediumModel = tasks.register<Exec>("prepareMediumModel") {
     )
     outputs.dir(mediumAssets)
     commandLine(
-        "python3", prepareScript.asFile, "model", "--cache", nativeCache.asFile,
+        prepareTool.asFile, "model", "--cache", nativeCache.asFile,
         "--sources", nativeSources.get().asFile, "--output", mediumAssets.get().asFile,
     )
     if (gradle.startParameter.isOffline) args("--offline")

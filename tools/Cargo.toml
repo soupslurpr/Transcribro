@@ -1,0 +1,16 @@
+[package]
+name = "transcribro-prepare"
+version = "0.1.0"
+edition = "2021"
+description = "Rust replacement for speech/tools/prepare.py + import_model.py (Transcribro Gate 1)"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+tar = "0.4"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+libc = "0.2"
+
+[profile.release]
+debug = false
