@@ -1,0 +1,11 @@
+[package]
+name = "transcribro-engine"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "transcribro_standalone"
+crate-type = ["cdylib", "rlib"]
+
+[profile.release]
+opt-level = 3
