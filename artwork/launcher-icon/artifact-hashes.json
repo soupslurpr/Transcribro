@@ -1,0 +1,16 @@
+{
+  "artwork/launcher-icon/foreground.png": "50463ca068ea51de6bdc3040132657a60be09168f667a66d0366b1a6eea8ac4f",
+  "app/src/main/res/drawable-mdpi/ic_launcher_foreground.png": "0907c51c2db9befa7462f56026e5434f9988dbe23cff5f46a2914238675f6d3f",
+  "app/src/main/res/drawable-hdpi/ic_launcher_foreground.png": "cfa074647ccd365132b1be33cc9d8a7e341f97c2f15854a81b58bafde138c2b0",
+  "app/src/main/res/drawable-xhdpi/ic_launcher_foreground.png": "cf3290f24fad74fbf0becd59cd7a1f96745046fa905791e24ddbf6330d79ec0c",
+  "app/src/main/res/drawable-xxhdpi/ic_launcher_foreground.png": "34b171a319977143c67a86ec8921999f16ac7f8bfac94515a84afa83014baf0b",
+  "app/src/main/res/drawable-xxxhdpi/ic_launcher_foreground.png": "e133a38d88f65902ea2a26bb84c4f97dd4a24932830a702e77de5dcb494a3011",
+  "app/src/main/res/drawable/ic_launcher_monochrome.xml": "82f436e06c22cedac0f1e6399dea3d3db510f1953dc27aee8a1034b526bdebf8",
+  "app/src/main/res/values/ic_launcher_background.xml": "efb75d7a44463b3bf3ef19cfd68dd36b0b78533801c58d7f59249125a5d8aea4",
+  "ic_launcher.svg": "62733f53b178d25aa94b1dd3c55ba8e7419ef5329ac0ff2f3a3df525cf6aa20e",
+  "app/src/main/ic_launcher-accrescent.png": "d62c00f3193e17560c31cf424b494eb86ef2b5e63fae557546e99964869d9bf2",
+  "artwork/launcher-icon/transcribro-launcher.blend": "a0f78c52ad97370a2a42747844e9cbbfe39f12a9e54effc0046b793f43f1a557",
+  "artwork/launcher-icon/monochrome.svg": "b2b8317fdb2c6e84aa937b43bcff39f77c721ddbc77eb487316fe306b97061d8",
+  "artwork/launcher-icon/monochrome.xml": "82f436e06c22cedac0f1e6399dea3d3db510f1953dc27aee8a1034b526bdebf8",
+  "artwork/launcher-icon/render.py": "01fb407cac97354be31cf6b902c2abde3ed56b9c281c5c9405cf998736b4c862"
+}

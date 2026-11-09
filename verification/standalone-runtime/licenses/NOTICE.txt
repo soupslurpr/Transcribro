@@ -1,0 +1,4 @@
+Native verification uses the production sources in speech/src/main/cpp/medium/.
+Their pinned origins and modifications are recorded in CREDITS and the
+packaged speech/src/main/assets/licenses/SOURCES.txt. The licenses in this
+directory accompany independently distributed verification binaries.

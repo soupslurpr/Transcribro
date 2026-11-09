@@ -1,0 +1,50 @@
+{
+  "runtime": "source model provenance; standalone native execution",
+  "source_commit": "234f60faa0eb388b01cdf7e60aca232af37aefda",
+  "model": "medium-streaming-en",
+  "model_arch": 5,
+  "release": "quantized_26_08_21",
+  "base_url": "https://download.moonshine.ai/model/medium-streaming-en/quantized_26_08_21",
+  "files": [
+    {
+      "file": "adapter.ort",
+      "sha256": "3f2a287def57cc094367a0eec3c4f5fc36a32ec420e86764b696920991b20281",
+      "bytes": 3651296
+    },
+    {
+      "file": "cross_kv.ort",
+      "sha256": "642f6e21cd305be79342207c6f9e6b681d469d55bc48c72b27b84846fb71fd1e",
+      "bytes": 11643776
+    },
+    {
+      "file": "decoder_kv.ort",
+      "sha256": "193bb366492b74fc4ad338c6778e8d8eb916aaa11b5aa264f9057f4db7759486",
+      "bytes": 146972408
+    },
+    {
+      "file": "encoder.ort",
+      "sha256": "12915e76ebac7dd287c5ea63965d06103a53ba1ce242a4a34f318f3958c60c37",
+      "bytes": 94705376
+    },
+    {
+      "file": "frontend.model.ort",
+      "sha256": "95768855c70c8251eeecc05fedf69999da1b8ab16f605c9f457fd3354b0ad6b5",
+      "bytes": 28720
+    },
+    {
+      "file": "frontend.weights.ort",
+      "sha256": "5ac941f490cbe035b335b99a414cc393d62d4c6f9f2423495b286870d271d709",
+      "bytes": 11889560
+    },
+    {
+      "file": "streaming_config.json",
+      "sha256": "28e83b7a28e91472692a035e0dae3116422ae43aeb2bef5ed822c44ce89b88af",
+      "bytes": 513
+    },
+    {
+      "file": "tokenizer.bin",
+      "sha256": "6884b35fd6377d4c4d32336a0bc152f36b64d1e45b6503683cdc238250a8472d",
+      "bytes": 249974
+    }
+  ]
+}

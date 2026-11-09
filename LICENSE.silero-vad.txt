@@ -1,8 +1,3 @@
-Some of the code in the app\src\main\kotlin\dev\soupslurpr\transcribro\recognitionservice\silerovad directory was
-adapted from a Silero VAD example
-and the Silero VAD models are at app\src\main\assets\models\silero_vad
-The Silero VAD license is below.
-
 MIT License
 
 Copyright (c) 2020-present Silero Team

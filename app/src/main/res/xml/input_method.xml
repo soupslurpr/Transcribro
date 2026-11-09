@@ -1,5 +1,5 @@
 <input-method xmlns:android="http://schemas.android.com/apk/res/android"
-    android:settingsActivity="dev.soupslurpr.transcribro.MainActivity">
+    android:settingsActivity="dev.soupslurpr.transcribro.SettingsActivity">
     <subtype
         android:imeSubtypeMode="voice"
         android:isAuxiliary="true"

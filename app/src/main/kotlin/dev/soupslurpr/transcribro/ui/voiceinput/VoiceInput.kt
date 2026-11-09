@@ -1,993 +1,729 @@
 package dev.soupslurpr.transcribro.ui.voiceinput
 
-import android.content.ComponentName
+import android.Manifest
 import android.content.Intent
-import android.content.res.Configuration.ORIENTATION_PORTRAIT
+import android.content.pm.PackageManager
+import android.icu.text.BreakIterator
 import android.inputmethodservice.InputMethodService
-import android.media.AudioManager
-import android.media.MediaPlayer
-import android.net.Uri
-import android.os.Bundle
-import android.provider.Settings
-import android.speech.RecognitionListener
-import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
-import android.speech.SpeechRecognizer.createSpeechRecognizer
+import android.os.SystemClock
+import android.text.InputType
 import android.view.KeyEvent
 import android.view.View
-import android.view.ViewConfiguration.getKeyRepeatDelay
+import android.view.inputmethod.CursorAnchorInfo
 import android.view.inputmethod.EditorInfo
-import android.view.inputmethod.ExtractedTextRequest
 import android.view.inputmethod.InputConnection
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.ArrowRightAlt
-import androidx.compose.material.icons.automirrored.outlined.Backspace
-import androidx.compose.material.icons.automirrored.outlined.KeyboardReturn
-import androidx.compose.material.icons.automirrored.outlined.NavigateBefore
-import androidx.compose.material.icons.automirrored.outlined.NavigateNext
-import androidx.compose.material.icons.automirrored.outlined.Redo
-import androidx.compose.material.icons.automirrored.outlined.Send
-import androidx.compose.material.icons.automirrored.outlined.Undo
-import androidx.compose.material.icons.filled.Keyboard
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.outlined.Block
-import androidx.compose.material.icons.outlined.Done
-import androidx.compose.material.icons.outlined.Mic
-import androidx.compose.material.icons.outlined.Search
-import androidx.compose.material3.Button
-import androidx.compose.material3.FilledIconToggleButton
-import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.FilledTonalIconButton
-import androidx.compose.material3.Icon
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedIconButton
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarDuration
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.MutableState
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.ExperimentalComposeUiApi
-import androidx.compose.ui.Modifier
+import android.view.inputmethod.InputMethodManager
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.*
 import androidx.compose.ui.platform.ComposeView
-import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.dp
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleOwner
-import androidx.lifecycle.LifecycleRegistry
-import androidx.lifecycle.ViewModelStore
-import androidx.lifecycle.ViewModelStoreOwner
-import androidx.lifecycle.setViewTreeLifecycleOwner
-import androidx.lifecycle.setViewTreeViewModelStoreOwner
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.ui.platform.ViewCompositionStrategy
+import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import androidx.lifecycle.*
 import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
-import dev.soupslurpr.transcribro.R
-import dev.soupslurpr.transcribro.dataStore
-import dev.soupslurpr.transcribro.preferences.PreferencesViewModel
-import dev.soupslurpr.transcribro.recognitionservice.MainRecognitionService
-import dev.soupslurpr.transcribro.ui.reusablecomposables.ScreenLazyColumn
-import dev.soupslurpr.transcribro.ui.reusablecomposables.longPressableKey
-import dev.soupslurpr.transcribro.ui.theme.TranscribroTheme
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
-import kotlin.time.Duration.Companion.milliseconds
+import dev.soupslurpr.transcribro.MainActivity
+import dev.soupslurpr.transcribro.MicrophonePermissionActivity
+import dev.soupslurpr.transcribro.dictation.AutomaticSending
+import dev.soupslurpr.transcribro.dictation.DictationController
+import dev.soupslurpr.transcribro.preferences.Preferences
+import dev.soupslurpr.transcribro.preferences.PreferencesRepository
+import dev.soupslurpr.transcribro.ui.TranscribroTheme
+import kotlinx.coroutines.*
 
-private var speechRecognizer: MutableState<SpeechRecognizer?> = mutableStateOf(null)
+class VoiceInput :
+    InputMethodService(), LifecycleOwner, ViewModelStoreOwner, SavedStateRegistryOwner {
+    private val registry = LifecycleRegistry(this)
+    private val savedState = SavedStateRegistryController.create(this)
+    override val lifecycle: Lifecycle
+        get() = registry
 
-private var isRecognizing by mutableStateOf(false)
+    override val viewModelStore = ViewModelStore()
+    override val savedStateRegistry: SavedStateRegistry
+        get() = savedState.savedStateRegistry
 
-private var showInsufficientPermissionsError by mutableStateOf(false)
-
-private var isSpeaking by mutableStateOf(false)
-
-class VoiceInput : InputMethodService() {
-    private val voiceInputLifecycleOwner = VoiceInputLifecycleOwner()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private lateinit var controller: DictationController
+    private var preferences by mutableStateOf(Preferences())
+    private var editor by mutableStateOf<EditorInfo?>(null)
+    private var shown = false
+    private var editorGeneration = 0L
+    private var expectedCursor = -1
+    private var reportedSelection = -1 to -1
+    private var hasSelection by mutableStateOf(false)
+    private val expectedEdits = ArrayDeque<Pair<Int, Int>>()
+    private var composition: EditorDictation? = null
+    private var dictationTarget: InputConnection? = null
+    private val automaticSending = AutomaticSending()
+    private var awaitingSendReset = false
+    private var allowSendRestart = false
+    private val queuedEdits = ArrayDeque<() -> Unit>()
+    private val pendingEditorEvents = ArrayDeque<() -> Unit>()
+    private var awaitingEditorSelection = false
+    private var keyEditSelection: Pair<Int, Int>? = null
+    private var editorSelectionTimeout: Job? = null
+    private var preferencesReady = false
+    private var pendingAutoStart = false
+    private var pendingManualStart = false
+    private var composeView: ComposeView? = null
 
     override fun onCreate() {
         super.onCreate()
-        voiceInputLifecycleOwner.onCreate()
+        savedState.performRestore(null)
+        registry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
+        controller = DictationController(this)
+        scope.launch {
+            PreferencesRepository(this@VoiceInput).values.collect {
+                preferences = it
+                preferencesReady = true
+                if (pendingManualStart) startDictating() else maybeAutoStart()
+            }
+        }
     }
 
-    @OptIn(ExperimentalComposeUiApi::class)
     override fun onCreateInputView(): View {
-        voiceInputLifecycleOwner.attachToDecorView(window?.window?.decorView)
-
-        val view = ComposeView(this)
-
-        view.setContent {
-            val context = LocalContext.current
-
-            val audioManager = context.getSystemService(AudioManager::class.java)
-
-            val startedRecognitionMediaPlayer = MediaPlayer.create(context, R.raw.started_recognition)
-
-            val stoppedRecognitionMediaPlayer = MediaPlayer.create(context, R.raw.stopped_recognition)
-
-            val preferencesViewModel: PreferencesViewModel = viewModel(
-                factory = PreferencesViewModel.PreferencesViewModelFactory(dataStore)
-            )
-
-            val preferencesUiState by preferencesViewModel.uiState.collectAsState()
-
-            val acceptedPrivacyPolicyAndLicense = preferencesUiState.acceptedPrivacyPolicyAndLicense.second.value
-
-            val autoStopRecognition by preferencesUiState.autoStopRecognition.second
-
-            val autoStartRecognition by preferencesUiState.autoStartRecognition.second
-
-            val snackbarHostState = remember { SnackbarHostState() }
-
-            val snackbarCoroutine = rememberCoroutineScope()
-
-            var snackbarJob: Job? by remember {
-                mutableStateOf(null)
-            }
-
-            fun cancelSnackbarJobAndLaunch(
-                message: String,
-                actionLabel: String? = null,
-                withDismissAction: Boolean = false,
-                duration: SnackbarDuration =
-                    if (actionLabel == null) SnackbarDuration.Short else SnackbarDuration.Indefinite
-            ) {
-                snackbarJob?.cancel()
-                snackbarJob = snackbarCoroutine.launch {
-                    snackbarHostState.showSnackbar(
-                        message,
-                        actionLabel,
-                        withDismissAction,
-                        duration
+        composeView?.disposeComposition()
+        window?.window?.decorView?.let {
+            it.setViewTreeLifecycleOwner(this)
+            it.setViewTreeViewModelStoreOwner(this)
+            it.setViewTreeSavedStateRegistryOwner(this)
+        }
+        return ComposeView(this).apply {
+            composeView = this
+            setViewTreeLifecycleOwner(this@VoiceInput)
+            setViewTreeViewModelStoreOwner(this@VoiceInput)
+            setViewTreeSavedStateRegistryOwner(this@VoiceInput)
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+            setContent {
+                val state by controller.state.collectAsState()
+                val dark = isSystemInDarkTheme()
+                SideEffect {
+                    window?.window?.let {
+                        WindowCompat.getInsetsController(
+                                it,
+                                it.decorView,
+                            )
+                            .isAppearanceLightNavigationBars = !dark
+                    }
+                }
+                TranscribroTheme {
+                    VoiceKeyboard(
+                        state = state,
+                        preferences = preferences,
+                        passwordField = isPassword(editor?.inputType ?: 0),
+                        hasSelection = hasSelection,
+                        action = action(),
+                        onStart = ::startDictating,
+                        onStop = controller::stop,
+                        onCancel = ::cancelDictation,
+                        onUndo = { edit { sendKey(KeyEvent.KEYCODE_Z, KeyEvent.META_CTRL_ON) } },
+                        onRedo = {
+                            edit {
+                                sendKey(
+                                    KeyEvent.KEYCODE_Z,
+                                    KeyEvent.META_CTRL_ON or KeyEvent.META_SHIFT_ON,
+                                )
+                            }
+                        },
+                        onClear = {
+                            edit {
+                                currentInputConnection?.deleteSurroundingText(
+                                    Int.MAX_VALUE,
+                                    Int.MAX_VALUE,
+                                )
+                            }
+                        },
+                        onLeft = { edit { moveCursor(forward = false) } },
+                        onRight = { edit { moveCursor(forward = true) } },
+                        onSwitch = {
+                            cancelDictation()
+                            if (!switchToPreviousInputMethod())
+                                getSystemService(InputMethodManager::class.java)
+                                    .showInputMethodPicker()
+                        },
+                        onSettings = {
+                            cancelDictation()
+                            startActivity(
+                                Intent(this@VoiceInput, MainActivity::class.java)
+                                    .setAction(Intent.ACTION_APPLICATION_PREFERENCES)
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            )
+                        },
+                        onSpace = { edit { currentInputConnection?.commitText(" ", 1) } },
+                        onDelete = { edit { backspace() } },
+                        onReturn = { edit { insertNewline() } },
+                        onAction = { edit { performEditorAction() } },
                     )
                 }
             }
+        }
+    }
 
-            val maxHeight = if (LocalConfiguration.current.orientation == ORIENTATION_PORTRAIT) {
-                LocalConfiguration.current.screenHeightDp.dp * 0.45f
-            } else {
-                LocalConfiguration.current.screenHeightDp.dp * 0.65f
-            }
+    override fun onStartInput(attribute: EditorInfo?, restarting: Boolean) {
 
-            TranscribroTheme(preferencesViewModel = preferencesViewModel) {
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(maxHeight)
-                ) {
-                    Scaffold(
-                        snackbarHost = {
-                            SnackbarHost(snackbarHostState)
-                        },
-                    ) { innerPadding ->
-                        Box(
-                            modifier = Modifier
-                                .padding(innerPadding)
-                                .padding(8.dp)
-                        ) {
-                            if (!acceptedPrivacyPolicyAndLicense) {
-                                ScreenLazyColumn {
-                                    item {
-                                        Text("Please accept the privacy policy and license first!")
-                                    }
-                                    item {
-                                        Button(
-                                            onClick = {
-                                                startActivity(context.packageManager.getLaunchIntentForPackage(context.packageName))
-                                            }
-                                        ) {
-                                            Text("Open Transcribro")
-                                        }
-                                    }
-                                }
-                            } else if (showInsufficientPermissionsError) {
-                                ScreenLazyColumn {
-                                    item {
-                                        Text(
-                                            "Please grant \"Allow only while using the app\" microphone permission in " +
-                                                    "settings to continue."
-                                        )
-                                    }
-                                    item {
-                                        Button(
-                                            onClick = {
-                                                val intent = Intent(
-                                                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                                                    Uri.fromParts("package", context.packageName, null)
-                                                )
+        super.onStartInput(attribute, restarting)
+        val previous = editor
+        val replacement = currentInputConnection
+        // Host undo/redo may recreate a Compose connection while applying our own edit.
+        // Rebase only that acknowledged edit in the same field; new destinations still stop.
+        if (
+            restarting &&
+                controller.state.value.active &&
+                awaitingEditorSelection &&
+                attribute != null &&
+                previous != null &&
+                replacement != null &&
+                attribute.packageName == previous.packageName &&
+                attribute.fieldId == previous.fieldId &&
+                attribute.inputType == previous.inputType &&
+                attribute.imeOptions == previous.imeOptions
+        ) {
+            editor = attribute
+            dictationTarget = replacement
+            composition = newComposition(replacement)
+            completeEditorEdit(attribute.initialSelStart, attribute.initialSelEnd)
+            return
+        }
+        // Compose may replace its connection when Send clears the same focused field.
+        // Android marks that restart explicitly; a new field always cancels dictation.
+        if (
+            restarting &&
+                controller.state.value.active &&
+                allowSendRestart &&
+                attribute != null &&
+                previous != null &&
+                attribute.packageName == previous.packageName &&
+                attribute.fieldId == previous.fieldId &&
+                attribute.inputType == previous.inputType &&
+                attribute.imeOptions == previous.imeOptions &&
+                replacement?.getTextBeforeCursor(1, 0)?.isEmpty() == true &&
+                replacement.getTextAfterCursor(1, 0)?.isEmpty() == true &&
+                replacement.getSelectedText(0).isNullOrEmpty()
+        ) {
+            editor = attribute
+            reportedSelection = 0 to 0
+            expectedCursor = 0
+            expectedEdits.clear()
+            awaitingSendReset = false
+            dictationTarget = replacement
+            composition = newComposition(replacement)
+            scope.launch { applyQueuedEdits() }
+            return
+        }
+        cancelDictation()
+        // Recognition feedback belongs to the field where that attempt happened.
+        // Retain it across a same-field restart, but not in a new destination.
+        if (!restarting) controller.clearMessage()
+        editorGeneration++
+        editor = attribute
+        expectedCursor = attribute?.let { minOf(it.initialSelStart, it.initialSelEnd) } ?: -1
+        reportedSelection = (attribute?.initialSelStart ?: -1) to (attribute?.initialSelEnd ?: -1)
+        hasSelection = attribute?.let { it.initialSelStart != it.initialSelEnd } ?: false
+    }
 
-                                                intent.addCategory(Intent.CATEGORY_DEFAULT)
+    override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
+        super.onStartInputView(info, restarting)
+        shown = true
+        registry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
+        pendingAutoStart = !restarting && !isPassword(info?.inputType ?: 0)
+        maybeAutoStart()
+    }
 
-                                                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    private fun maybeAutoStart() {
+        if (!shown || !preferencesReady || !pendingAutoStart) return
+        pendingAutoStart = false
+        if (preferences.autoStart && hasMicrophone()) startDictating()
+    }
 
-                                                startActivity(intent)
+    private fun hasMicrophone() =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
 
-                                                showInsufficientPermissionsError = false
-                                            }
-                                        ) {
-                                            Text("Open App Settings")
-                                        }
-                                    }
-                                }
-                            } else {
-                                LaunchedEffect(true) {
-                                    if (!isRecognizing) {
-                                        if (speechRecognizer.value == null) {
-                                            speechRecognizer.value = createSpeechRecognizer(
-                                                applicationContext,
-                                                ComponentName(applicationContext, MainRecognitionService::class.java)
-                                            )
-
-                                            speechRecognizer.value!!.setRecognitionListener(object :
-                                                RecognitionListener {
-                                                override fun onReadyForSpeech(params: Bundle?) {
-                                                    isRecognizing = true
-
-                                                    if (audioManager.ringerMode == AudioManager.RINGER_MODE_NORMAL) {
-                                                        startedRecognitionMediaPlayer.start()
-                                                    }
-                                                }
-
-                                                override fun onBeginningOfSpeech() {
-                                                    isSpeaking = true
-                                                }
-
-                                                override fun onRmsChanged(rmsdB: Float) {
-//                TODO("Not yet implemented")
-                                                }
-
-                                                override fun onBufferReceived(buffer: ByteArray?) {
-//                TODO("Not yet implemented")
-                                                }
-
-                                                override fun onEndOfSpeech() {
-                                                    isSpeaking = false
-                                                }
-
-                                                override fun onError(error: Int) {
-                                                    when (error) {
-                                                        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> {
-                                                            showInsufficientPermissionsError = true
-                                                        }
-
-                                                        SpeechRecognizer.ERROR_RECOGNIZER_BUSY, SpeechRecognizer.ERROR_CLIENT -> {
-                                                            cancelSnackbarJobAndLaunch(
-                                                                "Recognition is finishing, please wait or cancel.",
-                                                                withDismissAction = true,
-                                                                duration = SnackbarDuration.Short
-                                                            )
-                                                        }
-
-                                                        else -> {
-//                                                            println(error)
-                                                        }
-                                                    }
-                                                }
-
-                                                override fun onResults(results: Bundle?) {
-                                                    isRecognizing = false
-
-                                                    if (audioManager.ringerMode == AudioManager.RINGER_MODE_NORMAL) {
-                                                        stoppedRecognitionMediaPlayer.start()
-                                                    }
-
-                                                    if (preferencesUiState.autoSwitchToPreviousInputMethod.second.value) {
-                                                        this@VoiceInput.switchToPreviousInputMethod()
-                                                    }
-                                                }
-
-                                                override fun onPartialResults(partialResults: Bundle?) {
-                                                    currentInputConnection.also { ic: InputConnection ->
-                                                        if (partialResults != null) {
-                                                            val transcription = partialResults.getStringArrayList(
-                                                                SpeechRecognizer.RESULTS_RECOGNITION
-                                                            )?.get(0) ?: ""
-
-                                                            if (transcription.isNotEmpty()) {
-                                                                var textToCommit = if ((ic.getTextBeforeCursor(
-                                                                        2,
-                                                                        0
-                                                                    ) == "") || (ic.getTextBeforeCursor(1, 0) == "\n")
-                                                                    || (ic.getTextBeforeCursor(1, 0) == " ")
-                                                                ) {
-                                                                    transcription.removePrefix(" ")
-                                                                } else {
-                                                                    transcription
-                                                                }
-
-                                                                val selectedText = ic.getSelectedText(0)
-
-                                                                val readdUppercase =
-                                                                    textToCommit.filter { it.isLetter() }.firstOrNull {
-                                                                        !it.isUpperCase()
-                                                                    } == null
-
-                                                                if (!selectedText.isNullOrEmpty()) {
-                                                                    val removeSuffixPoint =
-                                                                        textToCommit.trim().toList().withIndex()
-                                                                            .reversed().firstOrNull {
-                                                                                it.value.isLetterOrDigit()
-                                                                            }
-
-                                                                    if (removeSuffixPoint != null) {
-                                                                        textToCommit = textToCommit.trim()
-                                                                            .substring(0..removeSuffixPoint.index)
-                                                                    }
-
-                                                                    val removePrefixPoint =
-                                                                        textToCommit.trim().toList().withIndex()
-                                                                            .firstOrNull {
-                                                                                it.value.isLetterOrDigit()
-                                                                            }
-
-                                                                    if (removePrefixPoint != null) {
-                                                                        textToCommit = textToCommit.trim()
-                                                                            .substring(removePrefixPoint.index..textToCommit.trim().lastIndex)
-                                                                    }
-
-                                                                    val selectedEndOfWordPunctuation =
-                                                                        selectedText.trim().toList().withIndex()
-                                                                            .reversed().firstOrNull {
-                                                                                it.value.isLetterOrDigit()
-                                                                            }
-
-                                                                    val firstSelectedNonWhitespaceCharacter =
-                                                                        selectedText.trim().firstOrNull()
-
-                                                                    if (firstSelectedNonWhitespaceCharacter != null) {
-                                                                        textToCommit =
-                                                                            if (textToCommit.firstOrNull { !it.isUpperCase() } == null) {
-                                                                                textToCommit
-                                                                            } else if (firstSelectedNonWhitespaceCharacter.isUpperCase()) {
-                                                                                textToCommit[0].uppercaseChar() + textToCommit.substring(
-                                                                                    1..textToCommit.lastIndex
-                                                                                )
-                                                                            } else if (firstSelectedNonWhitespaceCharacter.isLowerCase()) {
-                                                                                textToCommit[0].lowercaseChar() + textToCommit.substring(
-                                                                                    1..textToCommit.lastIndex
-                                                                                )
-                                                                            } else if (selectedText.firstOrNull { it.isLetterOrDigit() || it.isWhitespace() } == null) {
-                                                                                textToCommit[0].lowercaseChar() + textToCommit.substring(
-                                                                                    1..textToCommit.lastIndex
-                                                                                )
-                                                                            } else {
-                                                                                textToCommit
-                                                                            }
-                                                                    }
-
-                                                                    if (selectedEndOfWordPunctuation != null) {
-                                                                        textToCommit += selectedText.trim()
-                                                                            .substring(selectedEndOfWordPunctuation.index + 1..selectedText.trim().lastIndex)
-                                                                    }
-
-                                                                    if (selectedText.firstOrNull { it.isLetterOrDigit() } == null) {
-                                                                        textToCommit = " $textToCommit"
-
-                                                                        if (textToCommit.last().isLetterOrDigit()) {
-                                                                            textToCommit = "$textToCommit$selectedText"
-                                                                        }
-                                                                    }
-                                                                } else {
-                                                                    val twoCharactersBeforeCursor =
-                                                                        ic.getTextBeforeCursor(2, 0)
-                                                                    val firstLetterOrDigit = textToCommit.withIndex()
-                                                                        .firstOrNull { it.value.isLetterOrDigit() }
-
-                                                                    if ((twoCharactersBeforeCursor != null) && (twoCharactersBeforeCursor.firstOrNull { it.isLetterOrDigit() } != null)) {
-                                                                        if (twoCharactersBeforeCursor[0].isLetterOrDigit() && (twoCharactersBeforeCursor[1].isLetterOrDigit() || twoCharactersBeforeCursor[1].isWhitespace())) {
-                                                                            if (firstLetterOrDigit != null) {
-                                                                                val chars = textToCommit.toCharArray()
-
-                                                                                chars[firstLetterOrDigit.index] =
-                                                                                    firstLetterOrDigit.value.lowercaseChar()
-
-                                                                                textToCommit = chars.concatToString()
-                                                                            }
-                                                                        }
-                                                                    }
-                                                                }
-
-                                                                if (readdUppercase) {
-                                                                    textToCommit = textToCommit.uppercase()
-                                                                }
-
-                                                                ic.commitText(
-                                                                    textToCommit,
-                                                                    1
-                                                                )
-
-                                                                if (preferencesUiState.autoSendTranscription.second.value) {
-                                                                    ic.performEditorAction(EditorInfo.IME_ACTION_SEND)
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-
-                                                override fun onEvent(eventType: Int, params: Bundle?) {
-//            TODO("Not yet implemented")
-                                                }
-                                            })
-
-                                            if (autoStartRecognition) {
-                                                speechRecognizer.value!!.startListening(
-                                                    getStartListeningIntent(
-                                                        autoStopRecognition
-                                                    )
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-
-                                Column(
-                                    Modifier
-                                        .fillMaxSize()
-                                ) {
-                                    Row(
-                                        modifier = Modifier.fillMaxSize(),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.SpaceBetween
-                                    ) {
-                                        Column(
-                                            Modifier.weight(1f)
-                                        ) {
-                                            Row(
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .weight(0.25f)
-                                                    .padding(bottom = 6.dp),
-                                                verticalAlignment = Alignment.Top,
-                                                horizontalArrangement = Arrangement.Center
-                                            ) {
-                                                Column(
-                                                    modifier = Modifier
-                                                        .fillMaxHeight()
-                                                        .fillMaxWidth()
-                                                        .weight(0.5f),
-                                                ) {
-                                                    OutlinedIconButton(
-                                                        onClick = {
-                                                            speechRecognizer.value?.cancel()
-                                                            isRecognizing = false
-
-                                                            val intent = context.packageManager
-                                                                .getLaunchIntentForPackage(context.packageName)!!
-                                                                .apply {
-                                                                    action = (Intent.ACTION_APPLICATION_PREFERENCES)
-                                                                }
-
-                                                            startActivity(intent)
-                                                        },
-                                                        modifier = Modifier
-                                                            .fillMaxHeight()
-                                                            .fillMaxWidth()
-                                                            .weight(1f),
-                                                        shape = RoundedCornerShape(10.dp)
-                                                    ) {
-                                                        Icon(
-                                                            imageVector = Icons.Filled.Settings,
-                                                            contentDescription = "open Transcribro's settings"
-                                                        )
-                                                    }
-                                                    Spacer(modifier = Modifier.size(8.dp))
-                                                    FilledTonalIconButton(
-                                                        onClick = {
-                                                            speechRecognizer.value?.cancel()
-                                                            isRecognizing = false
-                                                            switchToPreviousInputMethod()
-                                                        },
-                                                        modifier = Modifier
-                                                            .fillMaxHeight()
-                                                            .fillMaxWidth()
-                                                            .weight(1f),
-                                                        shape = RoundedCornerShape(10.dp)
-                                                    ) {
-                                                        Icon(
-                                                            imageVector = Icons.Filled.Keyboard,
-                                                            contentDescription = "Cancel recognition and switch to the previous input method"
-                                                        )
-                                                    }
-                                                }
-                                                Spacer(modifier = Modifier.size(8.dp))
-                                                OutlinedButton(
-                                                    onClick = {
-                                                        if (isRecognizing) {
-                                                            speechRecognizer.value?.cancel()
-                                                            isRecognizing = false
-                                                        }
-                                                    },
-                                                    modifier = Modifier
-                                                        .fillMaxHeight()
-                                                        .fillMaxWidth()
-                                                        .weight(1f),
-                                                    enabled = isRecognizing,
-                                                    shape = RoundedCornerShape(10.dp)
-                                                ) {
-                                                    Text(
-                                                        "Cancel Recognition"
-                                                    )
-                                                }
-                                            }
-                                            FilledIconToggleButton(
-                                                checked = isRecognizing,
-                                                onCheckedChange = {
-                                                    if (isRecognizing) {
-                                                        speechRecognizer.value?.stopListening()
-                                                    } else {
-                                                        speechRecognizer.value?.startListening(
-                                                            getStartListeningIntent(
-                                                                autoStopRecognition
-                                                            )
-                                                        )
-                                                    }
-                                                },
-                                                modifier = Modifier
-                                                    .fillMaxHeight()
-                                                    .fillMaxWidth()
-                                                    .weight(0.75f)
-                                                    .padding(top = 2.dp),
-                                                shape = RoundedCornerShape(10.dp)
-                                            ) {
-                                                Icon(
-                                                    imageVector = Icons.Outlined.Mic,
-                                                    contentDescription = if (isRecognizing) {
-                                                        "Speech recognition active"
-                                                    } else {
-                                                        "Speech recognition inactive"
-                                                    },
-                                                    modifier = Modifier.size(165.dp)
-                                                )
-                                            }
-                                        }
-                                        Spacer(modifier = Modifier.size(8.dp))
-                                        Column(
-                                            modifier = Modifier.fillMaxWidth(0.4f)
-                                        ) {
-                                            Column(
-                                                modifier = Modifier
-                                                    .fillMaxHeight()
-                                                    .fillMaxWidth()
-                                                    .weight(1f),
-                                            ) {
-                                                FilledTonalButton(
-                                                    onClick = {
-                                                        val extractedText = currentInputConnection.getExtractedText(
-                                                            ExtractedTextRequest(),
-                                                            0
-                                                        ).text
-                                                        val beforeCursorText =
-                                                            currentInputConnection.getTextBeforeCursor(
-                                                                extractedText.length,
-                                                                0
-                                                            )
-                                                        val afterCursorText = currentInputConnection.getTextAfterCursor(
-                                                            extractedText.length,
-                                                            0
-                                                        )
-
-                                                        if (beforeCursorText != null) {
-                                                            if (afterCursorText != null) {
-                                                                currentInputConnection.deleteSurroundingText(
-                                                                    beforeCursorText.length,
-                                                                    afterCursorText.length
-                                                                )
-                                                            }
-                                                        }
-                                                    },
-                                                    modifier = Modifier
-                                                        .fillMaxHeight()
-                                                        .fillMaxWidth()
-                                                        .weight(1f),
-                                                    shape = RoundedCornerShape(10.dp)
-                                                ) {
-                                                    Text("Clear Unselected")
-                                                }
-                                                Spacer(modifier = Modifier.size(8.dp))
-                                                Row(
-                                                    Modifier
-                                                        .fillMaxHeight()
-                                                        .fillMaxWidth()
-                                                        .weight(1f),
-                                                ) {
-                                                    val undoInteractionSource =
-                                                        remember { MutableInteractionSource() }
-                                                    FilledTonalIconButton(
-                                                        onClick = {
-                                                            val downMetaState = KeyEvent.META_CTRL_ON
-                                                            val upMetaState = 0
-
-                                                            currentInputConnection.sendKeyEvent(
-                                                                KeyEvent(
-                                                                    System.currentTimeMillis(),
-                                                                    System.currentTimeMillis(),
-                                                                    KeyEvent.ACTION_DOWN,
-                                                                    KeyEvent.KEYCODE_Z,
-                                                                    0,
-                                                                    downMetaState
-                                                                )
-                                                            )
-                                                            currentInputConnection.sendKeyEvent(
-                                                                KeyEvent(
-                                                                    System.currentTimeMillis(),
-                                                                    System.currentTimeMillis(),
-                                                                    KeyEvent.ACTION_UP,
-                                                                    KeyEvent.KEYCODE_Z,
-                                                                    0,
-                                                                    upMetaState
-                                                                )
-                                                            )
-                                                        },
-                                                        modifier = Modifier
-                                                            .fillMaxHeight()
-                                                            .fillMaxWidth()
-                                                            .weight(1f)
-                                                            .longPressableKey(
-                                                                interactionSource = undoInteractionSource,
-                                                                onLongPress = {
-                                                                    while (isActive) {
-                                                                        val downMetaState =
-                                                                            KeyEvent.META_CTRL_ON
-                                                                        val upMetaState = 0
-
-                                                                        currentInputConnection.sendKeyEvent(
-                                                                            KeyEvent(
-                                                                                System.currentTimeMillis(),
-                                                                                System.currentTimeMillis(),
-                                                                                KeyEvent.ACTION_DOWN,
-                                                                                KeyEvent.KEYCODE_Z,
-                                                                                0,
-                                                                                downMetaState
-                                                                            )
-                                                                        )
-                                                                        currentInputConnection.sendKeyEvent(
-                                                                            KeyEvent(
-                                                                                System.currentTimeMillis(),
-                                                                                System.currentTimeMillis(),
-                                                                                KeyEvent.ACTION_UP,
-                                                                                KeyEvent.KEYCODE_Z,
-                                                                                0,
-                                                                                upMetaState
-                                                                            )
-                                                                        )
-                                                                        delay(getKeyRepeatDelay().milliseconds)
-                                                                    }
-                                                                },
-                                                            ),
-                                                        shape = RoundedCornerShape(10.dp),
-                                                        interactionSource = undoInteractionSource,
-                                                    ) {
-                                                        Icon(
-                                                            imageVector = Icons.AutoMirrored.Outlined.Undo,
-                                                            contentDescription = "Undo",
-                                                            modifier = Modifier.fillMaxSize(0.5f)
-                                                        )
-                                                    }
-                                                    Spacer(modifier = Modifier.size(8.dp))
-
-                                                    val redoInteractionSource =
-                                                        remember { MutableInteractionSource() }
-                                                    FilledTonalIconButton(
-                                                        onClick = {
-                                                            val downMetaState =
-                                                                KeyEvent.META_CTRL_ON or KeyEvent.META_SHIFT_ON
-                                                            val upMetaState = 0
-
-                                                            currentInputConnection.sendKeyEvent(
-                                                                KeyEvent(
-                                                                    System.currentTimeMillis(),
-                                                                    System.currentTimeMillis(),
-                                                                    KeyEvent.ACTION_DOWN,
-                                                                    KeyEvent.KEYCODE_Z,
-                                                                    0,
-                                                                    downMetaState
-                                                                )
-                                                            )
-                                                            currentInputConnection.sendKeyEvent(
-                                                                KeyEvent(
-                                                                    System.currentTimeMillis(),
-                                                                    System.currentTimeMillis(),
-                                                                    KeyEvent.ACTION_UP,
-                                                                    KeyEvent.KEYCODE_Z,
-                                                                    0,
-                                                                    upMetaState
-                                                                )
-                                                            )
-                                                        },
-                                                        modifier = Modifier
-                                                            .fillMaxHeight()
-                                                            .fillMaxWidth()
-                                                            .weight(1f)
-                                                            .longPressableKey(
-                                                                interactionSource = redoInteractionSource,
-                                                                onLongPress = {
-                                                                    while (isActive) {
-                                                                        val downMetaState =
-                                                                            KeyEvent.META_CTRL_ON or KeyEvent.META_SHIFT_ON
-                                                                        val upMetaState =
-                                                                            0
-
-                                                                        currentInputConnection.sendKeyEvent(
-                                                                            KeyEvent(
-                                                                                System.currentTimeMillis(),
-                                                                                System.currentTimeMillis(),
-                                                                                KeyEvent.ACTION_DOWN,
-                                                                                KeyEvent.KEYCODE_Z,
-                                                                                0,
-                                                                                downMetaState
-                                                                            )
-                                                                        )
-                                                                        currentInputConnection.sendKeyEvent(
-                                                                            KeyEvent(
-                                                                                System.currentTimeMillis(),
-                                                                                System.currentTimeMillis(),
-                                                                                KeyEvent.ACTION_UP,
-                                                                                KeyEvent.KEYCODE_Z,
-                                                                                0,
-                                                                                upMetaState
-                                                                            )
-                                                                        )
-                                                                        delay(getKeyRepeatDelay().milliseconds)
-                                                                    }
-                                                                }
-                                                            ),
-                                                        shape = RoundedCornerShape(10.dp),
-                                                        interactionSource = redoInteractionSource
-                                                    ) {
-                                                        Icon(
-                                                            imageVector = Icons.AutoMirrored.Outlined.Redo,
-                                                            contentDescription = "Redo",
-                                                            modifier = Modifier.fillMaxSize(0.5f)
-                                                        )
-                                                    }
-                                                }
-                                            }
-                                            Spacer(modifier = Modifier.size(8.dp))
-                                            Column(
-                                                modifier = Modifier
-                                                    .fillMaxHeight()
-                                                    .fillMaxWidth()
-                                                    .weight(1f)
-                                            ) {
-                                                val backspaceInteractionSource =
-                                                    remember { MutableInteractionSource() }
-                                                FilledTonalIconButton(
-                                                    onClick = {
-                                                        val selectedText =
-                                                            currentInputConnection.getSelectedText(0)
-                                                        if (selectedText.isNullOrEmpty()) {
-                                                            currentInputConnection.deleteSurroundingText(1, 0)
-                                                        } else {
-                                                            currentInputConnection.commitText("", 1)
-                                                        }
-                                                    },
-                                                    modifier = Modifier
-                                                        .fillMaxHeight()
-                                                        .fillMaxWidth()
-                                                        .weight(1f)
-                                                        .longPressableKey(
-                                                            interactionSource = backspaceInteractionSource,
-                                                            onLongPress = {
-                                                                while (isActive) {
-                                                                    val selectedText =
-                                                                        currentInputConnection.getSelectedText(0)
-                                                                    if (selectedText.isNullOrEmpty()) {
-                                                                        currentInputConnection.deleteSurroundingText(1, 0)
-                                                                    } else {
-                                                                        currentInputConnection.commitText("", 1)
-                                                                    }
-                                                                    delay(getKeyRepeatDelay().milliseconds)
-                                                                }
-                                                            },
-                                                        ),
-                                                    shape = RoundedCornerShape(10.dp),
-                                                    interactionSource = backspaceInteractionSource,
-                                                ) {
-                                                    Icon(
-                                                        imageVector = Icons.AutoMirrored.Outlined.Backspace,
-                                                        contentDescription = "Backspace",
-                                                        modifier = Modifier.fillMaxSize(0.5f)
-                                                    )
-                                                }
-
-                                                Spacer(modifier = Modifier.size(8.dp))
-
-                                                Row(
-                                                    modifier = Modifier
-                                                        .fillMaxHeight()
-                                                        .fillMaxWidth()
-                                                        .weight(1f),
-                                                ) {
-                                                    // TODO: why is the actionId seemingly always 0???
-                                                    val (actionKeyIcon, actionKeyContentDescription) = when (currentInputEditorInfo.actionId) {
-                                                        EditorInfo.IME_ACTION_NEXT -> Pair(
-                                                            Icons.AutoMirrored.Outlined.NavigateNext,
-                                                            "Next"
-                                                        )
-
-                                                        EditorInfo.IME_ACTION_GO -> Pair(
-                                                            Icons.AutoMirrored.Outlined.ArrowRightAlt,
-                                                            "Go"
-                                                        )
-
-                                                        EditorInfo.IME_ACTION_SEND -> Pair(
-                                                            Icons.AutoMirrored.Outlined.Send,
-                                                            "Send"
-                                                        )
-
-                                                        EditorInfo.IME_ACTION_DONE -> Pair(Icons.Outlined.Done, "Done")
-                                                        EditorInfo.IME_ACTION_NONE -> Pair(Icons.Outlined.Block, "None")
-                                                        EditorInfo.IME_ACTION_PREVIOUS -> Pair(
-                                                            Icons.AutoMirrored.Outlined.NavigateBefore,
-                                                            "Previous"
-                                                        )
-
-                                                        EditorInfo.IME_ACTION_SEARCH -> Pair(
-                                                            Icons.Outlined.Search,
-                                                            "Search"
-                                                        )
-
-                                                        else -> Pair(Icons.AutoMirrored.Outlined.Send, "Send")
-                                                    }
-
-                                                    FilledTonalIconButton(
-                                                        onClick = {
-                                                            if (actionKeyContentDescription == "Send") {
-                                                                currentInputConnection.performEditorAction(EditorInfo.IME_ACTION_SEND)
-                                                            } else {
-                                                                currentInputConnection.performEditorAction(
-                                                                    currentInputEditorInfo.actionId
-                                                                )
-                                                            }
-                                                        },
-                                                        modifier = Modifier
-                                                            .fillMaxHeight()
-                                                            .fillMaxWidth()
-                                                            .weight(1f),
-                                                        shape = RoundedCornerShape(10.dp)
-                                                    ) {
-                                                        Icon(
-                                                            imageVector = actionKeyIcon,
-                                                            contentDescription = actionKeyContentDescription,
-                                                            modifier = Modifier.fillMaxSize(0.5f)
-                                                        )
-                                                    }
-
-                                                    Spacer(modifier = Modifier.size(8.dp))
-
-                                                    FilledTonalIconButton(
-                                                        onClick = {
-                                                            currentInputConnection.sendKeyEvent(
-                                                                KeyEvent(
-                                                                    KeyEvent.ACTION_DOWN,
-                                                                    KeyEvent.KEYCODE_ENTER
-                                                                )
-                                                            )
-                                                            currentInputConnection.sendKeyEvent(
-                                                                KeyEvent(
-                                                                    KeyEvent.ACTION_UP,
-                                                                    KeyEvent.KEYCODE_ENTER
-                                                                )
-                                                            )
-                                                        },
-                                                        modifier = Modifier
-                                                            .fillMaxHeight()
-                                                            .fillMaxWidth()
-                                                            .weight(1f),
-                                                        shape = RoundedCornerShape(10.dp)
-                                                    ) {
-                                                        Icon(
-                                                            imageVector = Icons.AutoMirrored.Outlined.KeyboardReturn,
-                                                            contentDescription = "Return",
-                                                            modifier = Modifier.fillMaxSize(0.5f)
-                                                        )
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
+    private fun startDictating() {
+        if (!shown) return
+        pendingAutoStart = false
+        if (!preferencesReady) {
+            pendingManualStart = true
+            return
+        }
+        pendingManualStart = false
+        if (!hasMicrophone()) {
+            startActivity(
+                Intent(
+                        this,
+                        MicrophonePermissionActivity::class.java,
+                    )
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+            return
+        }
+        if (controller.state.value.active) return
+        queuedEdits.clear()
+        val target = currentInputConnection ?: return
+        dictationTarget = target
+        composition = newComposition(target)
+        val generation = editorGeneration
+        automaticSending.cancel()
+        awaitingSendReset = false
+        allowSendRestart = false
+        expectedEdits.clear()
+        controller.onText = { text ->
+            withEditorSelection {
+                val target = dictationTarget
+                if (target != null && shown && generation == editorGeneration) {
+                    // Some editors report selection changes after delivering the next result.
+                    if (
+                        awaitingSendReset &&
+                            target.getTextBeforeCursor(1, 0)?.isEmpty() == true &&
+                            target.getTextAfterCursor(1, 0)?.isEmpty() == true &&
+                            target.getSelectedText(0).isNullOrEmpty()
+                    ) {
+                        awaitingSendReset = false
+                        expectedCursor = 0
+                        expectedEdits.clear()
+                        applyQueuedEdits()
+                    }
+                    if (composition?.commit(text) != true) {
+                        controller.interrupt(
+                            "The text field changed. Check your words before continuing."
+                        )
+                        automaticSending.cancel()
+                    } else {
+                        allowSendRestart = false
+                        automaticSending.committedSpeech()
+                        if (awaitingSendReset) {
+                            // Preserve the new words, but stop sending if the host did not clear
+                            // the previous message. An accepted action is not a delivery receipt.
+                            controller.interrupt(
+                                "This app didn't clear its message field after Send. Your words are kept; check the message before continuing."
+                            )
+                            automaticSending.cancel()
+                            awaitingSendReset = false
                         }
                     }
                 }
             }
         }
-
-        return view
+        controller.onHypothesis = { text ->
+            withEditorSelection {
+                if (!controller.state.value.active) queuedEdits.clear()
+                val target = dictationTarget
+                if (target != null && shown && generation == editorGeneration) {
+                    // Wait for Send to clear its field before showing the next tentative phrase.
+                    if (
+                        awaitingSendReset &&
+                            target.getTextBeforeCursor(1, 0)?.isEmpty() == true &&
+                            target.getTextAfterCursor(1, 0)?.isEmpty() == true &&
+                            target.getSelectedText(0).isNullOrEmpty()
+                    ) {
+                        awaitingSendReset = false
+                        expectedCursor = 0
+                        expectedEdits.clear()
+                        applyQueuedEdits()
+                    }
+                    if (!awaitingSendReset && composition?.preview(text) == false) {
+                        controller.interrupt(
+                            "The text field changed. Check your words before continuing."
+                        )
+                        automaticSending.cancel()
+                    }
+                    if (!awaitingSendReset && text.isNotEmpty()) allowSendRestart = false
+                }
+            }
+        }
+        controller.onPhraseEnd = {
+            withEditorSelection {
+                if (shown && generation == editorGeneration) sendAutomatically(phraseEnd = true)
+            }
+        }
+        controller.onFinished = {
+            withEditorSelection {
+                if (shown && generation == editorGeneration) {
+                    sendAutomatically()
+                    if (!controller.state.value.failure && preferences.switchBack)
+                        switchToPreviousInputMethod()
+                }
+            }
+        }
+        controller.start(
+            continuous = !preferences.stopAtPause,
+            liveText = preferences.liveText && !isPassword(editor?.inputType ?: 0),
+            pauseMillis = preferences.pauseLength.millis,
+        )
     }
 
-    override fun onStartInputView(editorInfo: EditorInfo?, restarting: Boolean) {
-        voiceInputLifecycleOwner.onResume()
+    override fun onUpdateSelection(
+        oldSelStart: Int,
+        oldSelEnd: Int,
+        newSelStart: Int,
+        newSelEnd: Int,
+        candidatesStart: Int,
+        candidatesEnd: Int,
+    ) {
+        super.onUpdateSelection(
+            oldSelStart,
+            oldSelEnd,
+            newSelStart,
+            newSelEnd,
+            candidatesStart,
+            candidatesEnd,
+        )
+        hasSelection = newSelStart != newSelEnd
+        reportedSelection = newSelStart to newSelEnd
+        if (awaitingEditorSelection) {
+            // Key shortcuts travel through Android's input-event queue. An immediate cursor
+            // request can precede them, so only their changed selection acknowledges the key.
+            if (keyEditSelection != null && keyEditSelection != reportedSelection)
+                completeEditorEdit(newSelStart, newSelEnd)
+            return
+        }
+        val expected = expectedEdits.indexOf(newSelStart to newSelEnd)
+        if (expected >= 0) repeat(expected + 1) { expectedEdits.removeFirst() }
+        val sendReset = awaitingSendReset && newSelStart == 0 && newSelEnd == 0
+        if (sendReset) {
+            awaitingSendReset = false
+            scope.launch { applyQueuedEdits() }
+        }
+        if (
+            controller.state.value.active &&
+                (oldSelStart != newSelStart || oldSelEnd != newSelEnd) &&
+                expected < 0 &&
+                !sendReset &&
+                (newSelStart != expectedCursor || newSelEnd != expectedCursor)
+        ) {
+
+            composition?.abandon()
+            cancelDictation()
+        } else {
+            if (
+                composition?.selectionChanged(
+                    newSelStart,
+                    newSelEnd,
+                    candidatesStart,
+                    candidatesEnd,
+                ) == false
+            ) {
+                controller.interrupt("The text field changed. Check your words before continuing.")
+                automaticSending.cancel()
+            }
+        }
+        expectedCursor = expectedEdits.lastOrNull()?.first ?: minOf(newSelStart, newSelEnd)
+    }
+
+    private fun insertNewline() {
+        val input = currentInputConnection ?: return
+        val surrounding = input.getSurroundingText(0, 0, 0)
+        val selection =
+            if (surrounding != null && surrounding.offset >= 0)
+                (surrounding.offset + surrounding.selectionStart) to
+                    (surrounding.offset + surrounding.selectionEnd)
+            else reportedSelection
+        // Chromium turns commitText with a lone newline into Enter, which a page may use
+        // for Send. Replace the selection as text without requiring composition support.
+        if (selection.first >= 0 && selection.second >= 0)
+            input.replaceText(
+                minOf(selection.first, selection.second),
+                maxOf(selection.first, selection.second),
+                "\n",
+                1,
+                null,
+            )
+        else input.commitText("\n", 1)
+    }
+
+    private fun moveCursor(forward: Boolean) {
+        val input = currentInputConnection ?: return
+        val surrounding = input.getSurroundingText(1024, 1024, 0)
+        if (surrounding == null) {
+            sendKey(if (forward) KeyEvent.KEYCODE_DPAD_RIGHT else KeyEvent.KEYCODE_DPAD_LEFT)
+            return
+        }
+        val start = minOf(surrounding.selectionStart, surrounding.selectionEnd)
+        val end = maxOf(surrounding.selectionStart, surrounding.selectionEnd)
+        val boundary =
+            BreakIterator.getCharacterInstance().apply {
+                setText(surrounding.text.toString())
+            }
+        val next =
+            if (start != end) {
+                if (forward) end else start
+            } else if (forward) boundary.following(end) else boundary.preceding(start)
+        if (next != BreakIterator.DONE) {
+            val reported = expectedEdits.lastOrNull() ?: reportedSelection
+            val offset =
+                if (surrounding.offset >= 0) surrounding.offset
+                else minOf(reported.first, reported.second) - start
+            if (offset >= 0) input.setSelection(offset + next, offset + next)
+            else sendKey(if (forward) KeyEvent.KEYCODE_DPAD_RIGHT else KeyEvent.KEYCODE_DPAD_LEFT)
+        }
+    }
+
+    private fun backspace() {
+        val input = currentInputConnection ?: return
+        if (!input.getSelectedText(0).isNullOrEmpty()) {
+            input.commitText("", 1)
+        } else {
+            val before = input.getTextBeforeCursor(1024, 0)?.toString().orEmpty()
+            if (before.isEmpty()) return
+            val boundary = BreakIterator.getCharacterInstance().apply { setText(before) }
+            val end = boundary.last()
+            val start = boundary.previous()
+            if (start == 0 && before.length == 1024) {
+                sendKey(KeyEvent.KEYCODE_DEL)
+            } else if (start != BreakIterator.DONE) {
+                input.deleteSurroundingText(end - start, 0)
+            }
+        }
+    }
+
+    private fun expectSelection(start: Int, end: Int) {
+        expectedCursor = minOf(start, end)
+        if (expectedEdits.size == 64) expectedEdits.removeFirst()
+        expectedEdits.addLast(start to end)
+    }
+
+    private fun newComposition(target: InputConnection) =
+        EditorDictation(
+            target,
+            preferences.liveText && !isPassword(editor?.inputType ?: 0),
+            selection = { expectedEdits.lastOrNull() ?: reportedSelection },
+            expectSelection = ::expectSelection,
+        )
+
+    private fun cancelDictation() {
+        pendingAutoStart = false
+        pendingManualStart = false
+        queuedEdits.clear()
+        pendingEditorEvents.clear()
+        awaitingEditorSelection = false
+        keyEditSelection = null
+        editorSelectionTimeout?.cancel()
+        editorSelectionTimeout = null
+        composition?.cancel()
+        composition = null
+        dictationTarget = null
+        controller.cancel()
+        automaticSending.cancel()
+        awaitingSendReset = false
+        allowSendRestart = false
+        expectedEdits.clear()
+    }
+
+    private fun edit(action: () -> Unit) {
+        if (!controller.state.value.active) {
+            cancelDictation()
+            action()
+            return
+        }
+        if (queuedEdits.size >= 64) return
+        queuedEdits.addLast(action)
+        if (queuedEdits.size == 1) {
+            automaticSending.cancel()
+            controller.finishPhrase { applyQueuedEdits(allowInactive = true) }
+        }
+    }
+
+    private fun applyQueuedEdits(allowInactive: Boolean = false) {
+        if (!allowInactive && !controller.state.value.active) return
+        if (awaitingEditorSelection || awaitingSendReset || queuedEdits.isEmpty()) return
+        val input = dictationTarget ?: return
+        if (!shown || input !== currentInputConnection) return
+        val action = queuedEdits.removeFirst()
+        automaticSending.cancel()
+        awaitingEditorSelection = true
+        input.beginBatchEdit()
+        try {
+            action()
+        } finally {
+            input.endBatchEdit()
+        }
+        composition = newComposition(input)
+        if (awaitingSendReset) {
+            awaitingEditorSelection = false
+            return
+        }
+        // The request follows the edit on the same connection. Some Compose editors return
+        // surrounding text with offset -1; its relative selection cannot locate our next phrase.
+        val surrounding = input.getSurroundingText(0, 0, 0)
+        if (keyEditSelection == null && surrounding != null && surrounding.offset >= 0) {
+            completeEditorEdit(
+                surrounding.offset + surrounding.selectionStart,
+                surrounding.offset + surrounding.selectionEnd,
+            )
+        } else if (input.requestCursorUpdates(InputConnection.CURSOR_UPDATE_IMMEDIATE)) {
+            editorSelectionTimeout = scope.launch {
+                delay(1000)
+                if (awaitingEditorSelection)
+                    completeEditorEdit(reportedSelection.first, reportedSelection.second)
+            }
+        } else {
+            // The synchronous read above orders the edit and its selection notifications.
+            // Give those already queued main-thread callbacks a turn before using their result.
+            scope.launch {
+                yield()
+                if (awaitingEditorSelection)
+                    completeEditorEdit(reportedSelection.first, reportedSelection.second)
+            }
+        }
+    }
+
+    override fun onUpdateCursorAnchorInfo(info: CursorAnchorInfo?) {
+
+        super.onUpdateCursorAnchorInfo(info)
+        if (
+            awaitingEditorSelection &&
+                info != null &&
+                (keyEditSelection == null ||
+                    keyEditSelection != (info.selectionStart to info.selectionEnd))
+        ) {
+            completeEditorEdit(info.selectionStart, info.selectionEnd)
+        }
+    }
+
+    private fun completeEditorEdit(start: Int, end: Int) {
+        editorSelectionTimeout?.cancel()
+        editorSelectionTimeout = null
+        awaitingEditorSelection = false
+        keyEditSelection = null
+        expectedEdits.clear()
+        if (start >= 0 && end >= 0) {
+            reportedSelection = start to end
+            hasSelection = start != end
+            expectSelection(start, end)
+        }
+        while (pendingEditorEvents.isNotEmpty() && !awaitingEditorSelection) {
+            pendingEditorEvents.removeFirst().invoke()
+        }
+        applyQueuedEdits(allowInactive = true)
+    }
+
+    private fun withEditorSelection(event: () -> Unit) {
+        if (!awaitingEditorSelection) {
+            event()
+        } else if (pendingEditorEvents.size < 64) {
+            pendingEditorEvents.addLast(event)
+        } else {
+            cancelDictation()
+            controller.interrupt("The text field isn't responding. Your completed words are kept.")
+        }
+    }
+
+    private fun sendAutomatically(phraseEnd: Boolean = false) {
+        if (
+            awaitingSendReset ||
+                awaitingEditorSelection ||
+                queuedEdits.isNotEmpty() ||
+                controller.state.value.finishingPhrase
+        )
+            return
+        val input = currentInputConnection ?: return
+        if (
+            !automaticSending.consume(
+                preferences,
+                phraseEnd,
+                action() == EditorInfo.IME_ACTION_SEND,
+            )
+        )
+            return
+        awaitingSendReset = true
+        allowSendRestart = true
+        expectSelection(0, 0)
+        if (!input.performEditorAction(EditorInfo.IME_ACTION_SEND)) {
+            awaitingSendReset = false
+            allowSendRestart = false
+            expectedEdits.clear()
+            controller.interrupt(
+                "This field doesn't support automatic sending. Your words are kept."
+            )
+        }
+    }
+
+    private fun sendKey(code: Int, meta: Int = 0) {
+        val input = currentInputConnection ?: return
+        if (awaitingEditorSelection)
+            keyEditSelection = expectedEdits.lastOrNull() ?: reportedSelection
+        val time = SystemClock.uptimeMillis()
+        input.sendKeyEvent(KeyEvent(time, time, KeyEvent.ACTION_DOWN, code, 0, meta))
+        input.sendKeyEvent(KeyEvent(time, time, KeyEvent.ACTION_UP, code, 0, meta))
+    }
+
+    private fun action(): Int {
+        val options = editor?.imeOptions ?: 0
+        return if (options and EditorInfo.IME_FLAG_NO_ENTER_ACTION != 0) {
+            EditorInfo.IME_ACTION_NONE
+        } else {
+            options and EditorInfo.IME_MASK_ACTION
+        }
+    }
+
+    private fun performEditorAction() {
+        val action = action()
+        if (action != EditorInfo.IME_ACTION_NONE && action != EditorInfo.IME_ACTION_UNSPECIFIED) {
+            if (action == EditorInfo.IME_ACTION_SEND && controller.state.value.active) {
+                if (awaitingSendReset) return
+                awaitingSendReset = true
+                allowSendRestart = true
+                expectSelection(0, 0)
+                if (currentInputConnection?.performEditorAction(action) != true) {
+                    awaitingSendReset = false
+                    allowSendRestart = false
+                    controller.interrupt("This field doesn't support Send. Your words are kept.")
+                }
+            } else currentInputConnection?.performEditorAction(action)
+        }
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
-        voiceInputLifecycleOwner.onPause()
+        shown = false
+        cancelDictation()
+        registry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
+        super.onFinishInputView(finishingInput)
     }
 
     override fun onFinishInput() {
-        speechRecognizer.value?.cancel()
-        isRecognizing = false
+        shown = false
+        editorGeneration++
+        cancelDictation()
+        super.onFinishInput()
     }
+
+    override fun onEvaluateFullscreenMode() = false
 
     override fun onDestroy() {
+        // InputMethodService finishes the active input view during its teardown.
+        // Keep our lifecycle alive until those final callbacks have completed.
         super.onDestroy()
-        voiceInputLifecycleOwner.onDestroy()
-
-        speechRecognizer.value?.cancel()
-        speechRecognizer.value?.destroy()
-        speechRecognizer.value = null
-    }
-
-    private fun getStartListeningIntent(longForm: Boolean): Intent {
-        return Intent().apply {
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            putExtra(MainRecognitionService.EXTRA_AUTO_STOP, longForm)
-        }
-    }
-}
-
-class VoiceInputLifecycleOwner : LifecycleOwner, ViewModelStoreOwner, SavedStateRegistryOwner {
-    private val lifecycleRegistry: LifecycleRegistry =
-        LifecycleRegistry(this)
-    override val lifecycle: Lifecycle = lifecycleRegistry
-
-    override val viewModelStore: ViewModelStore = ViewModelStore()
-
-    private val savedStateRegistryController =
-        SavedStateRegistryController.create(this)
-    override val savedStateRegistry: SavedStateRegistry =
-        savedStateRegistryController.savedStateRegistry
-
-    fun onCreate() {
-        savedStateRegistryController.performRestore(null)
-        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
-    }
-
-    fun onResume() {
-        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
-    }
-
-    fun onPause() {
-        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
-    }
-
-    fun onDestroy() {
-        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
+        controller.close()
+        scope.cancel()
+        composeView?.disposeComposition()
+        registry.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
         viewModelStore.clear()
     }
 
-    fun attachToDecorView(decorView: View?) {
-        if (decorView == null) return
+    companion object {
+        fun isPassword(type: Int): Boolean {
+            val variation = type and InputType.TYPE_MASK_VARIATION
+            return when (type and InputType.TYPE_MASK_CLASS) {
+                InputType.TYPE_CLASS_TEXT ->
+                    variation == InputType.TYPE_TEXT_VARIATION_PASSWORD ||
+                        variation == InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD ||
+                        variation == InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+                InputType.TYPE_CLASS_NUMBER -> variation == InputType.TYPE_NUMBER_VARIATION_PASSWORD
+                else -> false
+            }
+        }
 
-        decorView.setViewTreeLifecycleOwner(this)
-        decorView.setViewTreeViewModelStoreOwner(this)
-        decorView.setViewTreeSavedStateRegistryOwner(this)
+        fun actionLabel(action: Int) =
+            when (action) {
+                EditorInfo.IME_ACTION_SEND -> "Send"
+                EditorInfo.IME_ACTION_SEARCH -> "Search"
+                EditorInfo.IME_ACTION_GO -> "Go"
+                EditorInfo.IME_ACTION_NEXT -> "Next"
+                EditorInfo.IME_ACTION_DONE -> "Done"
+                EditorInfo.IME_ACTION_PREVIOUS -> "Previous"
+                else -> "Return"
+            }
     }
 }

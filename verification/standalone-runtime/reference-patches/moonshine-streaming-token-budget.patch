@@ -1,0 +1,114 @@
+diff --git a/core/moonshine-streaming-model.h b/core/moonshine-streaming-model.h
+--- a/core/moonshine-streaming-model.h
++++ b/core/moonshine-streaming-model.h
+@@ -193,10 +193,13 @@
+    * reject the biased draft from the previous pass and then re-decode without
+    * the bias, losing the biasing entirely on streaming updates. The biaser's
+    * walk state is reset and advanced by this call.
++   * Transcribro: token_budget bounds output and speculative draft length.
++   * A negative budget retains the duration-derived default. All budgets are
++   * capped at 256 tokens and reserve one model-context position for BOS.
+    * Returns 0 on success. */
+   int decode_full(MoonshineStreamingState *state, const int *speculative_tokens,
+                   int speculative_len, int **tokens_out, int *tokens_len_out,
+-                  ContextBiaser *biaser = nullptr);
++                  ContextBiaser *biaser = nullptr, int token_budget = -1);
+ 
+   void decoder_reset(MoonshineStreamingState *state);
+ 
+diff --git a/core/moonshine-streaming-model.cpp b/core/moonshine-streaming-model.cpp
+--- a/core/moonshine-streaming-model.cpp
++++ b/core/moonshine-streaming-model.cpp
+@@ -1408,7 +1408,7 @@
+                                          const int *speculative_tokens,
+                                          int speculative_len, int **tokens_out,
+                                          int *tokens_len_out,
+-                                         ContextBiaser *biaser) {
++                                         ContextBiaser *biaser, int token_budget) {
+   if (state == nullptr) {
+     LOG("State is null\n");
+     return 1;
+@@ -1427,10 +1427,18 @@
+ 
+   std::vector<int> result_tokens;
+ 
+-  // Compute max tokens based on memory length (similar to new decoder)
+-  float duration_sec = state->memory_len * 0.020f;
+-  int max_tokens = std::min(static_cast<int>(std::ceil(duration_sec * 6.5)),
+-                            config.max_seq_len);
++  // Transcribro: honor the same bounded budget as greedy transcription.
++  // The separate 6.5-token/s estimate ignored a larger configured budget
++  // whenever a previous preview enabled speculative decoding.
++  const float duration_sec = state->memory_len * 0.020f;
++  const int requested_tokens =
++      token_budget >= 0
++          ? token_budget
++          : static_cast<int>(std::ceil(duration_sec * 6.5f));
++  const int context_limit = std::max(0, std::min(256, config.max_seq_len - 1));
++  const int max_tokens = std::clamp(requested_tokens, 0, context_limit);
++  // Verified draft tokens must not bypass the output or model-context bound.
++  speculative_len = std::clamp(speculative_len, 0, max_tokens);
+ 
+   // Helper lambda for argmax
+   auto argmax = [this](const float *logits) -> int {
+diff --git a/core/transcriber.cpp b/core/transcriber.cpp
+--- a/core/transcriber.cpp
++++ b/core/transcriber.cpp
+@@ -1416,10 +1416,15 @@
+   this->streaming_model->decoder_reset(&this->streaming_state);
+ 
+   const float duration_sec = audio_length / (float)INTERNAL_SAMPLE_RATE;
++  // Transcribro: unfinished patterns can spend the entire allowance guessing
++  // more words. Bound preview work without reducing completed-speech capacity.
++  float tokens_per_second = this->options.max_tokens_per_second;
++  if (!is_final && this->options.max_preview_tokens_per_second > 0.0f) {
++    tokens_per_second =
++        std::min(tokens_per_second, this->options.max_preview_tokens_per_second);
++  }
+   const int max_tokens =
+-      std::min(static_cast<int>(std::ceil(duration_sec *
+-                                          this->options.max_tokens_per_second)),
+-               256);
++      std::min(static_cast<int>(std::ceil(duration_sec * tokens_per_second)), 256);
+   std::vector<int64_t> tokens;
+ 
+   ContextBiaser *biaser =
+@@ -1439,7 +1444,7 @@
+     const int *draft_ptr = draft.empty() ? nullptr : draft.data();
+     int err = this->streaming_model->decode_full(
+         &this->streaming_state, draft_ptr, static_cast<int>(draft.size()), &out,
+-        &out_len, biaser);
++        &out_len, biaser, max_tokens);
+     if (err != 0) {
+       LOGF("Speculative decode_full failed: %d", err);
+       throw std::runtime_error("Speculative decode_full failed: " +
+diff --git a/core/transcriber.h b/core/transcriber.h
+--- a/core/transcriber.h
++++ b/core/transcriber.h
+@@ -186,6 +186,9 @@
+   size_t vad_look_behind_sample_count = 8192;
+   float vad_max_segment_duration = 15.0f;
+   float max_tokens_per_second = 6.5f;
++  // Transcribro: optionally limit provisional work separately. A negative
++  // default inherits max_tokens_per_second; final decoding is unaffected.
++  float max_preview_tokens_per_second = -1.0f;
+   // When true, streaming re-decodes verify the previous hypothesis with
+   // decode_full and continue from the first mismatch instead of greedy
+   // redecode from BOS. On by default for lower end-of-phrase latency.
+diff --git a/core/moonshine-c-api.cpp b/core/moonshine-c-api.cpp
+--- a/core/moonshine-c-api.cpp
++++ b/core/moonshine-c-api.cpp
+@@ -154,6 +154,13 @@
+       out_options.vad_max_segment_duration = float_from_string(option_value);
+     } else if (option_name == "max_tokens_per_second") {
+       out_options.max_tokens_per_second = float_from_string(option_value);
++    } else if (option_name == "max_preview_tokens_per_second") {
++      const float limit = float_from_string(option_value);
++      if (!std::isfinite(limit) || limit <= 0.0f) {
++        throw std::runtime_error(
++            "max_preview_tokens_per_second must be finite and positive");
++      }
++      out_options.max_preview_tokens_per_second = limit;
+     } else if (option_name == "use_speculative_decoding") {
+       out_options.use_speculative_decoding = bool_from_string(option_value);
+     } else if (option_name == "decode_incomplete_lines") {

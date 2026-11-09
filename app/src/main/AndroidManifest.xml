@@ -1,83 +1,66 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools">
-
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
-
-    <queries>
-        <intent>
-            <action android:name="android.speech.RecognitionListener" />
-        </intent>
-        <!--    Only android.speech.RecognitionListener should be enough in theory, but for some reason, some apps need android
-        .intent.action.MAIN-->
-        <intent>
-            <action android:name="android.intent.action.MAIN" />
-        </intent>
-    </queries>
-
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROCESSING" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <queries><intent><action android:name="android.speech.RecognitionService" /></intent></queries>
     <application
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:enableOnBackInvokedCallback="true"
-        android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
-        android:memtagMode="async"
+        android:memtagMode="sync"
         android:supportsRtl="true"
-        tools:targetApi="34">
+        android:theme="@style/Theme.Transcribro">
         <service
             android:name=".recognitionservice.MainRecognitionService"
             android:exported="true"
-            android:foregroundServiceType="microphone"
-            android:label="Transcribro Speech Recognition Service"
+            android:label="@string/app_name"
             android:permission="android.permission.RECORD_AUDIO">
             <intent-filter>
                 <action android:name="android.speech.RecognitionService" />
-
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
-            <meta-data
-                android:name="android.speech"
-                android:resource="@xml/recognition_service" />
+            <meta-data android:name="android.speech" android:resource="@xml/recognition_service" />
         </service>
+        <service android:name=".engine.TranscriptionWorker"
+            android:exported="false" android:isolatedProcess="true"
+            android:process=":transcription" />
+        <service android:name=".audio.FileTranscriptionService"
+            android:exported="false" android:foregroundServiceType="mediaProcessing" />
         <service
             android:name=".ui.voiceinput.VoiceInput"
             android:exported="true"
             android:permission="android.permission.BIND_INPUT_METHOD">
-            <intent-filter>
-                <action android:name="android.view.InputMethod" />
-            </intent-filter>
-            <meta-data
-                android:name="android.view.im"
-                android:resource="@xml/input_method" />
+            <intent-filter><action android:name="android.view.InputMethod" /></intent-filter>
+            <meta-data android:name="android.view.im" android:resource="@xml/input_method" />
         </service>
-
-        <activity
-            android:name=".MainActivity"
-            android:exported="true"
-            android:theme="@style/Theme.Transcribro">
+        <activity android:name=".MainActivity" android:exported="true"
+            android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
-
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.APPLICATION_PREFERENCES" />
-
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
-        <activity
-            android:name=".ui.action_recognize_speech.ActionRecognizeSpeechActivity"
-            android:exported="true"
-            android:theme="@style/Theme.FloatingWindow">
+        <!-- Android launches settingsActivity metadata with ACTION_MAIN. Give those
+             links a distinct entry point while keeping the same launcher activity. -->
+        <activity-alias android:name=".SettingsActivity"
+            android:targetActivity=".MainActivity" android:exported="true" />
+        <activity android:name=".MicrophonePermissionActivity" android:exported="false"
+            android:theme="@style/Theme.FloatingWindow" />
+        <activity android:name=".ui.action_recognize_speech.ActionRecognizeSpeechActivity"
+            android:exported="true" android:theme="@style/Theme.FloatingWindow">
             <intent-filter>
                 <action android:name="android.speech.action.RECOGNIZE_SPEECH" />
-
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
-
     </application>
-
 </manifest>

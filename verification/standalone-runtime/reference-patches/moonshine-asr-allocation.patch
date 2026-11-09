@@ -1,0 +1,303 @@
+Transcribro ASR allocation policy for Moonshine 0.1.5 at commit
+234f60faa0eb388b01cdf7e60aca232af37aefda, after the four recognition patches.
+Adapted upstream files remain MIT licensed; see CREDITS and the packaged
+Moonshine-MODIFICATIONS.txt. Model bytes must outlive all sessions.
+
+diff --git a/core/ort-utils/ort-utils.cpp b/core/ort-utils/ort-utils.cpp
+--- a/core/ort-utils/ort-utils.cpp
++++ b/core/ort-utils/ort-utils.cpp
+@@ -3,6 +3,9 @@
+ #include <cstdlib>
+ #include <cstring>
+ #include <filesystem>
++#include <memory>
++#include <mutex>
++#include <stdexcept>
+ 
+ #ifndef _WIN32
+ #include <fcntl.h>
+@@ -96,6 +99,82 @@
+ #else
+   return ort_api->CreateEnv(logging_level, logid, out);
+ #endif
++}
++
++namespace {
++void check_asr_status(const OrtApi *ort_api, OrtStatus *status) {
++  if (status == nullptr) return;
++  const std::string message = ort_api->GetErrorMessage(status);
++  ort_api->ReleaseStatus(status);
++  throw std::runtime_error(message);
++}
++}  // namespace
++
++std::shared_ptr<OrtEnv> ort_create_asr_env(const OrtApi *ort_api,
++                                        OrtLoggingLevel logging_level,
++                                        const char *logid) {
++  // Publish only fully configured environments. The weak cache retains no
++  // owner after the last ASR model releases its sessions and custom allocators.
++  static std::mutex mutex;
++  static std::weak_ptr<OrtEnv> cached;
++  std::lock_guard<std::mutex> lock(mutex);
++  if (auto current = cached.lock()) return current;
++
++  OrtEnv *raw_env = nullptr;
++  check_asr_status(ort_api,
++                   ort_create_env(ort_api, logging_level, logid, &raw_env));
++  std::shared_ptr<OrtEnv> owner(raw_env, [ort_api](OrtEnv *env) {
++    ort_api->ReleaseEnv(env);
++  });
++  OrtMemoryInfo *raw_info = nullptr;
++  check_asr_status(ort_api, ort_api->CreateCpuMemoryInfo(
++                                OrtArenaAllocator, OrtMemTypeDefault, &raw_info));
++  std::unique_ptr<OrtMemoryInfo, decltype(ort_api->ReleaseMemoryInfo)> info(
++      raw_info, ort_api->ReleaseMemoryInfo);
++  const char *keys[] = {"max_mem", "arena_extend_strategy"};
++  // Bound arena growth and request exact extensions rather than doubling.
++  // This does not bound model buffers, direct reservations, or total process RSS.
++  const size_t values[] = {512ULL * 1024 * 1024, 1};
++  OrtArenaCfg *raw_config = nullptr;
++  check_asr_status(ort_api,
++                   ort_api->CreateArenaCfgV2(keys, values, 2, &raw_config));
++  std::unique_ptr<OrtArenaCfg, decltype(ort_api->ReleaseArenaCfg)> config(
++      raw_config, ort_api->ReleaseArenaCfg);
++  // GetSharedAllocator has a raw CPU fallback in ORT 1.23.2 and cannot detect
++  // this registration. The shared owner above determines its lifetime instead.
++  check_asr_status(ort_api, ort_api->CreateAndRegisterAllocator(
++                                owner.get(), info.get(), config.get()));
++  cached = owner;
++  return owner;
++}
++
++OrtSessionOptions *ort_create_asr_session_options(const OrtApi *ort_api,
++                                                  bool prepack) {
++  OrtSessionOptions *raw_options = nullptr;
++  check_asr_status(ort_api, ort_api->CreateSessionOptions(&raw_options));
++  std::unique_ptr<OrtSessionOptions, decltype(ort_api->ReleaseSessionOptions)>
++      options(raw_options, ort_api->ReleaseSessionOptions);
++  ort_maybe_force_single_thread(ort_api, options.get());
++  check_asr_status(ort_api, ort_api->SetSessionGraphOptimizationLevel(
++                                options.get(), ORT_ENABLE_EXTENDED));
++  const char *keys[] = {"session.load_model_format",
++                        "session.use_ort_model_bytes_directly",
++                        "session.use_ort_model_bytes_for_initializers",
++                        "session.use_env_allocators",
++                        "session.disable_prepacking"};
++  const char *values[] = {"ORT", "1", "1", "1", prepack ? "0" : "1"};
++  for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); ++i) {
++    check_asr_status(ort_api, ort_api->AddSessionConfigEntry(
++                                  options.get(), keys[i], values[i]));
++  }
++  // Model bytes outlive every session, so eligible initializers alias them.
++  // Disable memory patterns to avoid ORT 1.23.2 reserving an unused initializer
++  // slab. The shared CPU arena still reuses activation allocations. Only the
++  // repeatedly executed streaming decoder prepares packed weights; other
++  // components avoid that extra retained memory.
++  check_asr_status(ort_api, ort_api->EnableCpuMemArena(options.get()));
++  check_asr_status(ort_api, ort_api->DisableMemPattern(options.get()));
++  return options.release();
+ }
+ 
+ int ort_session_from_memory(const OrtApi *ort_api, OrtEnv *env,
+diff --git a/core/ort-utils/ort-utils.h b/core/ort-utils/ort-utils.h
+--- a/core/ort-utils/ort-utils.h
++++ b/core/ort-utils/ort-utils.h
+@@ -2,6 +2,7 @@
+ #define ORT_UTILS_H
+ 
+ #include <filesystem>
++#include <memory>
+ #include <string>
+ #include <vector>
+ 
+@@ -47,6 +48,18 @@
+ // runs inference instead of aborting at session construction.
+ OrtStatus *ort_create_env(const OrtApi *ort_api, OrtLoggingLevel logging_level,
+                           const char *logid, OrtEnv **out);
++
++// ASR models share a CPU arena while any ASR owner remains alive. ORT's env is
++// process-global; other sessions opting into env allocators can also use it.
++// Retain this owner until sessions and custom allocators have been destroyed.
++std::shared_ptr<OrtEnv> ort_create_asr_env(const OrtApi *ort_api,
++                                        OrtLoggingLevel logging_level,
++                                        const char *logid);
++
++// Returns owned options, or throws before publishing partially configured ones.
++// Sessions require retained model bytes and an env from ort_create_asr_env.
++OrtSessionOptions *ort_create_asr_session_options(const OrtApi *ort_api,
++                                                  bool prepack = false);
+ 
+ int ort_session_from_path(const OrtApi *ort_api, OrtEnv *env,
+                           OrtSessionOptions *session_options, const char *path,
+diff --git a/core/moonshine-model.cpp b/core/moonshine-model.cpp
+--- a/core/moonshine-model.cpp
++++ b/core/moonshine-model.cpp
+@@ -99,8 +99,10 @@
+       max_tokens_per_second(max_tokens_per_second),
+       log_ort_run(log_ort_run) {
+   ort_api = OrtGetApiBase()->GetApi(ORT_API_VERSION);
+-  LOG_ORT_ERROR(ort_api, ort_create_env(ort_api, ORT_LOGGING_LEVEL_WARNING,
+-                                        "MoonshineModel", &ort_env));
++  ort_env_owner = ort_create_asr_env(ort_api, ORT_LOGGING_LEVEL_WARNING,
++                                   "MoonshineModel");
++  ort_env = ort_env_owner.get();
++  ort_session_options = ort_create_asr_session_options(ort_api);
+   LOG_ORT_ERROR(ort_api,
+                 ort_api->CreateCpuMemoryInfo(
+                     OrtDeviceAllocator, OrtMemTypeDefault, &ort_memory_info));
+@@ -112,16 +114,11 @@
+   // Used only for our string allocations, to avoid memory fragmentation.
+   ort_string_allocator = new MoonshineOrtAllocator(ort_memory_info);
+ 
+-  LOG_ORT_ERROR(ort_api, ort_api->CreateSessionOptions(&ort_session_options));
+-  ort_maybe_force_single_thread(ort_api, ort_session_options);
+-  ort_configure_ort_file_session(ort_api, ort_session_options);
+   ort_configure_execution_providers(ort_api, ort_session_options,
+                                     ort_provider_names, coreml_cache_dir);
+ }
+ 
+ MoonshineModel::~MoonshineModel() {
+-  ort_api->ReleaseEnv(ort_env);
+-  ort_api->ReleaseMemoryInfo(ort_memory_info);
+   ort_api->ReleaseSessionOptions(ort_session_options);
+   ort_api->ReleaseSession(encoder_session);
+   ort_api->ReleaseSession(decoder_session);
+@@ -131,6 +128,9 @@
+   delete ort_session_allocator;
+   delete ort_string_allocator;
+   delete tokenizer;
++  ort_api->ReleaseMemoryInfo(ort_memory_info);
++  ort_env_owner.reset();
++  ort_env = nullptr;
+ #ifndef _WIN32
+   unmap_model(&encoder_mmapped_data, &encoder_mmapped_data_size);
+   unmap_model(&decoder_mmapped_data, &decoder_mmapped_data_size);
+diff --git a/core/moonshine-model.h b/core/moonshine-model.h
+--- a/core/moonshine-model.h
++++ b/core/moonshine-model.h
+@@ -4,6 +4,7 @@
+ #include <stddef.h>
+ #include <stdint.h>
+ 
++#include <memory>
+ #include <mutex>
+ #include <string>
+ #include <vector>
+@@ -16,6 +17,7 @@
+ 
+ struct MoonshineModel {
+   const OrtApi *ort_api;
++  std::shared_ptr<OrtEnv> ort_env_owner;
+   OrtEnv *ort_env;
+   OrtSessionOptions *ort_session_options;
+   OrtMemoryInfo *ort_memory_info;
+diff --git a/core/moonshine-streaming-model.cpp b/core/moonshine-streaming-model.cpp
+--- a/core/moonshine-streaming-model.cpp
++++ b/core/moonshine-streaming-model.cpp
+@@ -200,26 +200,30 @@
+       tokenizer(nullptr),
+       log_ort_run(log_ort_run) {
+   ort_api = OrtGetApiBase()->GetApi(ORT_API_VERSION);
+-  LOG_ORT_ERROR(ort_api, ort_create_env(ort_api, ORT_LOGGING_LEVEL_WARNING,
+-                                        "MoonshineStreamingModel", &ort_env));
++  ort_env_owner = ort_create_asr_env(ort_api, ORT_LOGGING_LEVEL_WARNING,
++                                   "MoonshineStreamingModel");
++  ort_env = ort_env_owner.get();
++  // Configure the RAII-owned decoder options before acquiring raw resources.
++  ort_decoder_session_options = {
++      ort_create_asr_session_options(ort_api, true),
++      ort_api->ReleaseSessionOptions};
++  ort_session_options = ort_create_asr_session_options(ort_api);
+   LOG_ORT_ERROR(ort_api,
+                 ort_api->CreateCpuMemoryInfo(
+                     OrtDeviceAllocator, OrtMemTypeDefault, &ort_memory_info));
+   ort_allocator = new MoonshineOrtAllocator(ort_memory_info);
+ 
+-  LOG_ORT_ERROR(ort_api, ort_api->CreateSessionOptions(&ort_session_options));
+-  ort_maybe_force_single_thread(ort_api, ort_session_options);
+-  ort_configure_ort_file_session(ort_api, ort_session_options);
+   ort_configure_execution_providers(ort_api, ort_session_options,
+                                     ort_provider_names, coreml_cache_dir);
++  ort_configure_execution_providers(ort_api, ort_decoder_session_options.get(),
++                                    ort_provider_names, coreml_cache_dir);
+ 
+   memset(&config, 0, sizeof(config));
+ }
+ 
+ MoonshineStreamingModel::~MoonshineStreamingModel() {
+-  ort_api->ReleaseEnv(ort_env);
+-  ort_api->ReleaseMemoryInfo(ort_memory_info);
+   ort_api->ReleaseSessionOptions(ort_session_options);
++  ort_decoder_session_options.reset();
+   if (frontend_session) ort_api->ReleaseSession(frontend_session);
+   if (encoder_session) ort_api->ReleaseSession(encoder_session);
+   if (adapter_session) ort_api->ReleaseSession(adapter_session);
+@@ -227,6 +231,9 @@
+   if (decoder_kv_session) ort_api->ReleaseSession(decoder_kv_session);
+   delete ort_allocator;
+   delete tokenizer;
++  ort_api->ReleaseMemoryInfo(ort_memory_info);
++  ort_env_owner.reset();
++  ort_env = nullptr;
+ #ifndef _WIN32
+   unmap_model(&frontend_mmapped_data, &frontend_mmapped_data_size);
+   unmap_model(&encoder_mmapped_data, &encoder_mmapped_data_size);
+@@ -433,7 +440,7 @@
+   RETURN_ON_NULL(cross_kv_session);
+ 
+   RETURN_ON_ERROR(ort_session_from_path(
+-      ort_api, ort_env, ort_session_options, decoder_kv_path.c_str(),
++      ort_api, ort_env, ort_decoder_session_options.get(), decoder_kv_path.c_str(),
+       &decoder_kv_session, &decoder_kv_mmapped_data,
+       &decoder_kv_mmapped_data_size));
+   RETURN_ON_NULL(decoder_kv_session);
+@@ -455,7 +462,7 @@
+   unmap_model(&decoder_kv_mmapped_data, &decoder_kv_mmapped_data_size);
+ #endif
+   RETURN_ON_ERROR(ort_session_from_path(
+-      ort_api, ort_env, ort_session_options, path, &decoder_kv_session,
++      ort_api, ort_env, ort_decoder_session_options.get(), path, &decoder_kv_session,
+       &decoder_kv_mmapped_data, &decoder_kv_mmapped_data_size));
+   RETURN_ON_NULL(decoder_kv_session);
+   return 0;
+@@ -497,7 +504,7 @@
+   RETURN_ON_NULL(cross_kv_session);
+ 
+   RETURN_ON_ERROR(ort_session_from_memory(
+-      ort_api, ort_env, ort_session_options, decoder_kv_model_data,
++      ort_api, ort_env, ort_decoder_session_options.get(), decoder_kv_model_data,
+       decoder_kv_model_data_size, &decoder_kv_session));
+   RETURN_ON_NULL(decoder_kv_session);
+ 
+@@ -601,7 +608,7 @@
+   RETURN_ON_NULL(cross_kv_session);
+ 
+   RETURN_ON_ERROR(ort_session_from_asset(
+-      ort_api, ort_env, ort_session_options, assetManager,
++      ort_api, ort_env, ort_decoder_session_options.get(), assetManager,
+       decoder_kv_path.c_str(), &decoder_kv_session, &decoder_kv_mmapped_data,
+       &decoder_kv_mmapped_data_size));
+   RETURN_ON_NULL(decoder_kv_session);
+diff --git a/core/moonshine-streaming-model.h b/core/moonshine-streaming-model.h
+--- a/core/moonshine-streaming-model.h
++++ b/core/moonshine-streaming-model.h
+@@ -4,6 +4,7 @@
+ #include <stddef.h>
+ #include <stdint.h>
+ 
++#include <memory>
+ #include <mutex>
+ #include <string>
+ #include <vector>
+@@ -82,8 +83,11 @@
+ 
+ struct MoonshineStreamingModel {
+   const OrtApi *ort_api;
++  std::shared_ptr<OrtEnv> ort_env_owner;
+   OrtEnv *ort_env;
+   OrtSessionOptions *ort_session_options;
++  std::unique_ptr<OrtSessionOptions, decltype(OrtApi::ReleaseSessionOptions)>
++      ort_decoder_session_options{nullptr, nullptr};
+   OrtMemoryInfo *ort_memory_info;
+   MoonshineOrtAllocator *ort_allocator;
+ 

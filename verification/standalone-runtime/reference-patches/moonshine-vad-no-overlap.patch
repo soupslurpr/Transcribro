@@ -1,0 +1,51 @@
+--- a/core/voice-activity-detector.cpp
++++ b/core/voice-activity-detector.cpp
+@@ -50,6 +50,7 @@
+ void VoiceActivityDetector::start() {
+   _is_active = true;
+   samples_processed_count = 0;
++  last_completed_segment_end_sample_count = 0;
+   segments.clear();
+   current_segment_audio_buffer.resize(0);
+   look_behind_audio_buffer.resize(look_behind_sample_count, 0.0f);
+@@ -180,9 +181,12 @@
+   }
+   bool current_is_voice = smoothed_probability > threshold;
+   if (current_is_voice && !previous_is_voice) {
+-    // Make sure we don't "look back" to before the start of the stream.
++    // Transcribro: preserve onset context without decoding any sample twice.
++    // The first segment may look back to the start of the stream; later
++    // segments may only use samples after the previous completed segment.
+     const size_t look_behind_size =
+-        std::min(look_behind_sample_count, samples_processed_count);
++        std::min(look_behind_sample_count,
++                 samples_processed_count - last_completed_segment_end_sample_count);
+     current_segment_audio_buffer = std::vector<float>(
+         look_behind_audio_buffer.begin() +
+             (look_behind_audio_buffer.size() - look_behind_size),
+@@ -194,7 +198,6 @@
+                                         audio_data + audio_data_size);
+     on_voice_end();
+     current_segment_audio_buffer.resize(0);
+-    look_behind_audio_buffer.resize(look_behind_sample_count, 0.0f);
+   } else if (current_is_voice && previous_is_voice) {
+     current_segment_audio_buffer.insert(current_segment_audio_buffer.end(),
+                                         audio_data,
+@@ -228,6 +231,7 @@
+ }
+ 
+ void VoiceActivityDetector::on_voice_end() {
++  last_completed_segment_end_sample_count = samples_processed_count;
+   VoiceActivitySegment *segment = &(segments.back());
+   const float current_time = seconds_from_sample_count(samples_processed_count);
+   segment->audio_data = current_segment_audio_buffer;
+--- a/core/voice-activity-detector.h
++++ b/core/voice-activity-detector.h
+@@ -36,6 +36,7 @@
+   int32_t probability_window_index;
+   std::vector<VoiceActivitySegment> segments;
+   size_t samples_processed_count;
++  size_t last_completed_segment_end_sample_count;
+   std::vector<float> current_segment_audio_buffer;
+   std::vector<float> look_behind_audio_buffer;
+   std::vector<float> processing_remainder_audio_buffer;

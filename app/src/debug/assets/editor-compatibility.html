@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Local editor compatibility fixture</title>
+<style>
+  body { margin: 16px; font: 20px sans-serif; }
+  input, textarea, [contenteditable] {
+    box-sizing: border-box; width: 100%; min-height: 120px; padding: 12px;
+    border: 1px solid #888; font: inherit; white-space: pre-wrap;
+  }
+  [hidden] { display: none; }
+</style>
+<input id="input" aria-label="Local message" enterkeyhint="send" hidden>
+<textarea id="textarea" aria-label="Local message" enterkeyhint="send" hidden></textarea>
+<div id="rich" role="textbox" aria-label="Local message" contenteditable="true"
+     enterkeyhint="send" hidden></div>
+<script>
+  let field;
+  let composingStart = -1;
+  let composingText = '';
+  function text() { return field.isContentEditable ? field.innerText : field.value; }
+  function selection() {
+    if (!field.isContentEditable) return [field.selectionStart, field.selectionEnd];
+    const selected = window.getSelection();
+    if (!selected.rangeCount || !field.contains(selected.anchorNode)) return [0, 0];
+    const range = selected.getRangeAt(0);
+    const prefix = document.createRange();
+    prefix.selectNodeContents(field);
+    prefix.setEnd(range.startContainer, range.startOffset);
+    const start = prefix.toString().length;
+    return [start, start + range.toString().length];
+  }
+  function publish() {
+    if (!field) return;
+    const [start, end] = selection();
+    fixture.state(JSON.stringify({text: text(), start, end, composingStart,
+      composingEnd: composingStart < 0 ? -1 : composingStart + composingText.length}));
+  }
+  function setContent(content) {
+    if (field.isContentEditable) field.innerHTML = content;
+    else field.value = content;
+    field.focus();
+    if (field.isContentEditable) {
+      const range = document.createRange();
+      range.selectNodeContents(field);
+      range.collapse(false);
+      const selected = window.getSelection();
+      selected.removeAllRanges();
+      selected.addRange(range);
+    } else field.setSelectionRange(content.length, content.length);
+    composingStart = -1;
+    composingText = '';
+    publish();
+  }
+  function init(kind) {
+    field = document.getElementById(kind);
+    field.hidden = false;
+    field.addEventListener('input', publish);
+    field.addEventListener('compositionstart', () => {
+      composingStart = selection()[0];
+      composingText = '';
+    });
+    field.addEventListener('compositionupdate', event => { composingText = event.data; });
+    field.addEventListener('compositionend', () => {
+      composingStart = -1;
+      composingText = '';
+      publish();
+    });
+    document.addEventListener('selectionchange', publish);
+    field.addEventListener('keydown', event => {
+      if (event.key === 'Enter' && !event.isComposing) {
+        event.preventDefault();
+        fixture.send(text());
+      }
+    });
+    setContent('');
+  }
+</script>
+</html>

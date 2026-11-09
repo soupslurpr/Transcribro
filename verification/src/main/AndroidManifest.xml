@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <queries>
+        <package android:name="dev.soupslurpr.transcribro.reimagined" />
+        <intent><action android:name="android.speech.RecognitionService" /></intent>
+    </queries>
+    <application>
+        <activity android:name="dev.soupslurpr.transcribro.RecognitionClientActivity"
+            android:exported="false" android:theme="@android:style/Theme.Material.Light.NoActionBar" />
+    </application>
+</manifest>

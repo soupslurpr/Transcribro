@@ -1,0 +1,21 @@
+--- a/core/moonshine-streaming-model.cpp
++++ b/core/moonshine-streaming-model.cpp
+@@ -835,6 +835,18 @@
+     return 0;
+   }
+ 
++  // Transcribro: rebuild the completed encoder representation from the full
++  // retained feature sequence. Incremental windows can change the final
++  // decoder result, including an immediate EOS after a valid speech preview.
++  // Keep incremental encoding for previews; finalize from one complete span.
++  if (is_final) {
++    state->encoder_frames_emitted = 0;
++    state->memory.clear();
++    state->memory_len = 0;
++    state->adapter_pos_offset = 0;
++    state->cross_kv_valid = false;
++  }
++
+   const int stable_count =
+       is_final ? total_features
+                : std::max(0, total_features - config.total_lookahead);

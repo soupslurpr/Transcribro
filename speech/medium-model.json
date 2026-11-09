@@ -1,0 +1,18 @@
+{
+  "runtime": "transcribro-standalone-medium-v1",
+  "original_values_preserved": true,
+  "archive_bytes": 249585408,
+  "archive_sha256": "11da1c8706a7b0b386d954ff9d77d805f2f4cd0cbbf09ca8292c0e68d492f896",
+  "files": [
+    {
+      "file": "medium.trm.zst",
+      "bytes": 223755763,
+      "sha256": "de2e9fd91654e889909c8420069ac24a60a5b088771e93e3204d8fb7b7e38184"
+    },
+    {
+      "file": "tokenizer.bin",
+      "bytes": 249974,
+      "sha256": "6884b35fd6377d4c4d32336a0bc152f36b64d1e45b6503683cdc238250a8472d"
+    }
+  ]
+}

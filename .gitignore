@@ -1,6 +1,7 @@
 *.iml
 .gradle
-/local.properties
+.kotlin/
+build/
 /.idea/caches
 /.idea/libraries
 /.idea/modules.xml
@@ -9,8 +10,8 @@
 /.idea/assetWizardSettings.xml
 /.idea/deploymentTargetDropDown.xml
 .DS_Store
-/build
-/captures
+__pycache__/
+/verification/**/*.log
 .externalNativeBuild
 .cxx
 local.properties

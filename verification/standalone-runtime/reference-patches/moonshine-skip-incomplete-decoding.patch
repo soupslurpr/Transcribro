@@ -1,0 +1,144 @@
+Transcribro per-call preview suppression (2026-09-21).
+
+Base: Moonshine 0.1.5 source revision
+234f60faa0eb388b01cdf7e60aca232af37aefda, after Transcribro's existing
+VAD-overlap, final-full-encode, and streaming-token-budget patches.
+
+Local extension flag: MOONSHINE_FLAG_SKIP_INCOMPLETE_DECODING (1u << 2).
+Pass it to moonshine_transcribe_stream only when current analysis should
+skip tentative decoding under backlog. Public C signatures, struct layouts,
+and the original four-argument internal entry point remain unchanged.
+Default behavior is unchanged when this flag is absent.
+
+Adapted upstream files (MIT; preserve the existing Moonshine license):
+https://github.com/moonshine-ai/moonshine/blob/234f60faa0eb388b01cdf7e60aca232af37aefda/core/moonshine-c-api.h
+https://github.com/moonshine-ai/moonshine/blob/234f60faa0eb388b01cdf7e60aca232af37aefda/core/transcriber.h
+https://github.com/moonshine-ai/moonshine/blob/234f60faa0eb388b01cdf7e60aca232af37aefda/core/transcriber.cpp
+
+Changes: optional per-call unfinished decoder suppression after frontend and
+encoder advancement; retain the same line's text/word metadata under the
+existing output lock; completed lines keep normal decoding and token bounds.
+No shared option mutation, thread changes, new buffers, or text heuristics.
+The adapted source paths and extended C header are recorded in CREDITS and
+the independent Moonshine modification notice. JNI uses the generated,
+patched C header from the same source tree as the runtime.
+
+Prerequisite source SHA-256:
+e5c9038c4987d87f40abd78f843bd6ab0bff96a5ffd1cc2557c5531b0cbab21f  core/moonshine-c-api.h
+aae167f2d0f77ae472aaf74245813d2598822da028717ea31a6dd7bf6e71e51d  core/transcriber.h
+8d4237618b248e9cd9a8516abf18df064aedb8ddb67df8731d706adf8bb3d74a  core/transcriber.cpp
+
+diff --git a/core/moonshine-c-api.h b/core/moonshine-c-api.h
+--- a/core/moonshine-c-api.h
++++ b/core/moonshine-c-api.h
+@@ -151,6 +151,14 @@
+    words like "stop" / "clear" / "delete" can still be classified by
+    higher-level Python code. */
+ #define MOONSHINE_FLAG_SPELLING_MODE (1 << 1)
++/* Transcribro extension for moonshine_transcribe_stream on streaming models.
++   Advance all supplied audio through VAD, frontend, and encoder, but skip
++   decoder work for unfinished lines during this call. Existing unfinished
++   text and word metadata are retained; a new unfinished line has no text yet.
++   Completed lines always receive normal full decoding and token budgets.
++   The flag never completes a line, changes confirmation, or persists to the
++   next call. It does not override the normal transcription interval. */
++#define MOONSHINE_FLAG_SKIP_INCOMPLETE_DECODING (1u << 2)
+ 
+ /* --------------------------- DATA STRUCTURES ----------------------------- */
+ 
+@@ -765,9 +773,12 @@
+    `stream_handle` should be a handle to a stream returned by
+    moonshine_create_stream.
+ 
+-   `flags` should be a bitwise OR of flags. Currently the only supported flag is
+-   MOONSHINE_FLAG_FORCE_UPDATE, which ignores the time-based caching logic to
+-   ensure the stream is fully analyzed by the models.
++   `flags` should be a bitwise OR of flags. MOONSHINE_FLAG_FORCE_UPDATE
++   ignores the time-based caching logic. MOONSHINE_FLAG_SPELLING_MODE applies
++   the configured spelling fusion. The local Transcribro extension
++   MOONSHINE_FLAG_SKIP_INCOMPLETE_DECODING advances streaming model audio
++   without updating tentative text; completed lines still decode normally.
++   Omit this extension for the original decoding behavior.
+ 
+    `out_transcript` should be a pointer to a pointer to a transcript_t struct.
+    The transcript_t struct will be populated with the transcript data, which
+diff --git a/core/transcriber.h b/core/transcriber.h
+--- a/core/transcriber.h
++++ b/core/transcriber.h
+@@ -367,6 +367,10 @@
+                                                        size_t audio_length,
+                                                        uint64_t segment_id,
+                                                        bool is_final);
++  // Transcribro per-call control; retain the existing entry point above.
++  std::string *transcribe_segment_with_streaming_model(
++      const float *audio_data, size_t audio_length, uint64_t segment_id,
++      bool is_final, bool skip_incomplete_decoding);
+ };
+ 
+ #endif
+\ No newline at end of file
+diff --git a/core/transcriber.cpp b/core/transcriber.cpp
+--- a/core/transcriber.cpp
++++ b/core/transcriber.cpp
+@@ -1049,13 +1049,29 @@
+     // Transcribe the segment using the appropriate model
+     if (is_streaming_model_arch(this->options.model_arch) &&
+         this->streaming_model != nullptr) {
+-      // Use streaming model for transcription (incremental processing)
++      // Transcribro: skip only tentative decoder work for this call. Keep
++      // consuming frontend/encoder state and always decode completed lines.
++      const bool skip_incomplete_decoding =
++          !segment.is_complete &&
++          (flags & MOONSHINE_FLAG_SKIP_INCOMPLETE_DECODING) != 0;
+       line.text = transcribe_segment_with_streaming_model(
+           segment.audio_data.data(), segment.audio_data.size(), line.id,
+-          segment.is_complete);
+-
+-      // Compute word timestamps from streaming model's collected attention
+-      if (this->options.word_timestamps &&
++          segment.is_complete, skip_incomplete_decoding);
++      if (skip_incomplete_decoding) {
++        // The output mutex above protects both this lookup and publication.
++        // No decoder ran, so retain the same line's prior hypothesis rather
++        // than replacing it with the helper's empty skipped-decode result.
++        const auto previous = stream->transcript_output->internal_lines_map.find(line.id);
++        if (previous != stream->transcript_output->internal_lines_map.end()) {
++          if (previous->second.text != nullptr)
++            *line.text = *previous->second.text;
++          line.words = previous->second.words;
++        }
++      }
++
++      // Compute word timestamps only when a decoder actually ran. A skipped
++      // preview retains its previous words and remains unconfirmed.
++      if (!skip_incomplete_decoding && this->options.word_timestamps &&
+           !this->streaming_model->cross_attention_buffer.empty() &&
+           !this->last_streaming_tokens.empty()) {
+         float seg_duration =
+@@ -1341,6 +1357,13 @@
+ std::string *Transcriber::transcribe_segment_with_streaming_model(
+     const float *audio_data, size_t audio_length, uint64_t segment_id,
+     bool is_final) {
++  return transcribe_segment_with_streaming_model(
++      audio_data, audio_length, segment_id, is_final, false);
++}
++
++std::string *Transcriber::transcribe_segment_with_streaming_model(
++    const float *audio_data, size_t audio_length, uint64_t segment_id,
++    bool is_final, bool skip_incomplete_decoding) {
+   if (audio_length == 0 || this->streaming_model == nullptr) {
+     return new std::string();
+   }
+@@ -1409,7 +1432,11 @@
+     return new std::string();
+   }
+ 
+-  if (!is_final && !this->options.decode_incomplete_lines) {
++  if (!is_final &&
++      (skip_incomplete_decoding || !this->options.decode_incomplete_lines)) {
++    // Audio and encoder positions have advanced above. Keep the last actual
++    // speculative draft for the next decode; do not reset decoder state or
++    // manufacture an empty/new hypothesis. The caller retains prior text.
+     return new std::string();
+   }
+ 
