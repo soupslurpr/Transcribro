@@ -352,6 +352,16 @@ fn model_mode(ctx: &Ctx, output: &Path, sources_dir: &Path) -> Result<String, St
     }
     fs::copy(ctx.speech.join("medium-model.json"), destination.join("model.json"))
         .map_err(|e| e.to_string())?;
+    // Gate 6: also publish the TRMED002 (format v2) archive next to the
+    // compressed v1 asset. The Android runtime memory-maps this
+    // uncompressed file and borrows its weights zero-copy; the .zst
+    // remains as the fallback asset. Conversion is value-verified
+    // against the v1 archive by construction (see convert_v2.rs and
+    // the verify_trmed002 tool).
+    crate::convert_v2::run_convert_v2(
+        &artifacts.join("medium.trm"),
+        &destination.join("medium.trm"),
+    )?;
     Ok(format!(
         "Exact original Medium assets prepared: {}",
         manifest["archive_sha256"].as_str().unwrap_or("")

@@ -64,7 +64,415 @@ fn sgemm_stride_k(n: usize, k: usize) -> usize {
 /// C[t][j] = sum_k A[t][k] * B[k][j], where the MLAS call is
 /// MlasGemm(NoTrans, NoTrans, M=n, N=m, K=k) — so the SGEMM K-blocking is
 /// governed by (N=m, K=k). beta = 0.
+// ---------------------------------------------------------------------
+// Gate 6 S5: aarch64 NEON fast paths. The x86 forms in this file are
+// bit-exact models of MLAS kernels and stay untouched; on aarch64 the
+// bar is transcript equivalence (NOTES.md numeric policy), so these
+// paths use clean ascending-FMA orders with NEON vectorization. The exp
+// polynomial is the same MLAS Horner chain evaluated lane-wise, which
+// is per-element identical to the scalar form apart from the softmax
+// summation order.
+
+/// Ascending dot product. On non-aarch64 this is exactly the scalar
+/// mul_add chain the attention code used inline (bit-identical).
+pub fn dot_asc(a: &[f32], b: &[f32]) -> f32 {
+    #[cfg(target_arch = "aarch64")]
+    {
+        debug_assert_eq!(a.len(), b.len());
+        unsafe {
+            use std::arch::aarch64::*;
+            let n = a.len();
+            let (ap, bp) = (a.as_ptr(), b.as_ptr());
+            let mut acc0 = vdupq_n_f32(0.0);
+            let mut acc1 = vdupq_n_f32(0.0);
+            let mut acc2 = vdupq_n_f32(0.0);
+            let mut acc3 = vdupq_n_f32(0.0);
+            let mut i = 0usize;
+            while i + 16 <= n {
+                acc0 = vfmaq_f32(acc0, vld1q_f32(ap.add(i)), vld1q_f32(bp.add(i)));
+                acc1 = vfmaq_f32(acc1, vld1q_f32(ap.add(i + 4)), vld1q_f32(bp.add(i + 4)));
+                acc2 = vfmaq_f32(acc2, vld1q_f32(ap.add(i + 8)), vld1q_f32(bp.add(i + 8)));
+                acc3 = vfmaq_f32(acc3, vld1q_f32(ap.add(i + 12)), vld1q_f32(bp.add(i + 12)));
+                i += 16;
+            }
+            let s01 = vaddq_f32(acc0, acc1);
+            let s23 = vaddq_f32(acc2, acc3);
+            let s = vaddq_f32(s01, s23);
+            let mut lanes = [0.0f32; 4];
+            vst1q_f32(lanes.as_mut_ptr(), s);
+            let mut total = (lanes[0] + lanes[1]) + (lanes[2] + lanes[3]);
+            while i < n {
+                total = a[i].mul_add(b[i], total);
+                i += 1;
+            }
+            return total;
+        }
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        let mut total = 0.0f32;
+        for i in 0..a.len() {
+            total = a[i].mul_add(b[i], total);
+        }
+        total
+    }
+}
+
+/// `sumexp_exp` evaluated on 4 lanes: the identical MLAS Horner chain
+/// with vfmaq (per-element identical), finished with the exact
+/// power-of-two scale per lane.
+/// `p * 2^m` for 4 lanes with integer-valued m in [-150, 200]:
+/// two bit-constructed power-of-two multiplies (m split into a
+/// clamped part and a remainder, both in the normal-exponent
+/// range). Two roundings instead of the exact f64 path's one --
+/// immaterial under the aarch64 transcript-equivalence bar, and it
+/// keeps the softmax/erf inner loops fully vectorized.
+#[cfg(target_arch = "aarch64")]
+unsafe fn scale_pow2_vec(
+    p: std::arch::aarch64::float32x4_t,
+    m: std::arch::aarch64::float32x4_t,
+) -> std::arch::aarch64::float32x4_t {
+    use std::arch::aarch64::*;
+    let m1 = vminq_f32(vmaxq_f32(m, vdupq_n_f32(-100.0)), vdupq_n_f32(100.0));
+    let m2 = vsubq_f32(m, m1);
+    let bits1 = vreinterpretq_f32_u32(vshlq_n_u32(
+        vreinterpretq_u32_s32(vaddq_s32(vcvtq_s32_f32(m1), vdupq_n_s32(127))),
+        23,
+    ));
+    let bits2 = vreinterpretq_f32_u32(vshlq_n_u32(
+        vreinterpretq_u32_s32(vaddq_s32(vcvtq_s32_f32(m2), vdupq_n_s32(127))),
+        23,
+    ));
+    vmulq_f32(vmulq_f32(p, bits1), bits2)
+}
+
+#[cfg(target_arch = "aarch64")]
+unsafe fn sumexp_vec(x: std::arch::aarch64::float32x4_t) -> std::arch::aarch64::float32x4_t {
+    use std::arch::aarch64::*;
+    let v = vmaxq_f32(x, vdupq_n_f32(-103.9720840454));
+    let t = vfmaq_f32(vdupq_n_f32(12582912.0), vdupq_n_f32(1.4426950408889634), v);
+    let m = vsubq_f32(t, vdupq_n_f32(12582912.0));
+    let mut r = vfmaq_f32(v, vdupq_n_f32(-0.693145752), m);
+    r = vfmaq_f32(r, vdupq_n_f32(-1.42860677e-6), m);
+    let mut p = vdupq_n_f32(f32::from_bits(0x3ab4a000));
+    p = vfmaq_f32(vdupq_n_f32(f32::from_bits(0x3c092f6e)), p, r);
+    p = vfmaq_f32(vdupq_n_f32(f32::from_bits(0x3d2aadad)), p, r);
+    p = vfmaq_f32(vdupq_n_f32(f32::from_bits(0x3e2aaa28)), p, r);
+    p = vfmaq_f32(vdupq_n_f32(f32::from_bits(0x3efffffb)), p, r);
+    p = vfmaq_f32(vdupq_n_f32(1.0), p, r);
+    p = vfmaq_f32(vdupq_n_f32(1.0), p, r);
+    scale_pow2_vec(p, m)
+}
+
+#[cfg(target_arch = "aarch64")]
+fn softmax_row_neon(row: &mut [f32]) {
+    use std::arch::aarch64::*;
+    let n = row.len();
+    if n == 0 {
+        return;
+    }
+    unsafe {
+        let mut max4 = vdupq_n_f32(f32::NEG_INFINITY);
+        let mut i = 0usize;
+        while i + 4 <= n {
+            max4 = vmaxq_f32(max4, vld1q_f32(row.as_ptr().add(i)));
+            i += 4;
+        }
+        let mut ma = [0.0f32; 4];
+        vst1q_f32(ma.as_mut_ptr(), max4);
+        let mut max = f32::NEG_INFINITY;
+        for &v in &ma {
+            if v > max {
+                max = v;
+            }
+        }
+        while i < n {
+            if row[i] > max {
+                max = row[i];
+            }
+            i += 1;
+        }
+        let neg = vdupq_n_f32(-max);
+        let mut acc4 = vdupq_n_f32(0.0);
+        let mut tail_acc = 0.0f32;
+        let mut i = 0usize;
+        while i + 4 <= n {
+            let e = sumexp_vec(vaddq_f32(vld1q_f32(row.as_ptr().add(i)), neg));
+            vst1q_f32(row.as_mut_ptr().add(i), e);
+            acc4 = vaddq_f32(acc4, e);
+            i += 4;
+        }
+        while i < n {
+            let e = sumexp_exp(row[i] - max);
+            row[i] = e;
+            tail_acc += e;
+            i += 1;
+        }
+        let mut aa = [0.0f32; 4];
+        vst1q_f32(aa.as_mut_ptr(), acc4);
+        let sum = ((aa[0] + aa[1]) + (aa[2] + aa[3])) + tail_acc;
+        let scale = 1.0f32 / sum;
+        let sv = vdupq_n_f32(scale);
+        let mut i = 0usize;
+        while i + 4 <= n {
+            let v = vmulq_f32(vld1q_f32(row.as_ptr().add(i)), sv);
+            vst1q_f32(row.as_mut_ptr().add(i), v);
+            i += 4;
+        }
+        while i < n {
+            row[i] *= scale;
+            i += 1;
+        }
+    }
+}
+
+/// NEON SGEMM (NoTrans/NoTrans): C = A * B, all row-major. Rank-1
+/// update form over k with contiguous B rows -- the scalar model's
+/// StrideK walk over B columns is cache-hostile and is the single
+/// biggest on-device cost. Rows are split across scoped threads for
+/// large problems.
+#[cfg(target_arch = "aarch64")]
+fn gemm_nn_neon(a: &[f32], n: usize, k: usize, b: &[f32], m: usize, c: &mut [f32]) {
+    let work = (n as u64) * (k as u64) * (m as u64);
+    if n >= 8 && work >= (1 << 30) {
+        let c_addr = c.as_mut_ptr() as usize;
+        crate::pool::parallel_rows(n, 4, 8, &|start, take| {
+            let cslice = unsafe {
+                std::slice::from_raw_parts_mut((c_addr as *mut f32).add(start * m), take * m)
+            };
+            gemm_rows_neon(a, start, start + take, k, b, m, cslice);
+        });
+        return;
+    }
+    gemm_rows_neon(a, 0, n, k, b, m, c);
+}
+
+#[cfg(target_arch = "aarch64")]
+fn gemm_rows_neon(a: &[f32], t0: usize, t1: usize, k: usize, b: &[f32], m: usize, c: &mut [f32]) {
+    use std::arch::aarch64::*;
+    let bp = b.as_ptr();
+    for t in t0..t1 {
+        let arow = &a[t * k..(t + 1) * k];
+        let crow = &mut c[(t - t0) * m..(t - t0 + 1) * m];
+        let ap = arow.as_ptr();
+        let mut j = 0usize;
+        while j + 16 <= m {
+            unsafe {
+                let mut acc0 = vdupq_n_f32(0.0);
+                let mut acc1 = vdupq_n_f32(0.0);
+                let mut acc2 = vdupq_n_f32(0.0);
+                let mut acc3 = vdupq_n_f32(0.0);
+                for kk in 0..k {
+                    let av = vdupq_n_f32(*ap.add(kk));
+                    let brow = bp.add(kk * m + j);
+                    acc0 = vfmaq_f32(acc0, av, vld1q_f32(brow));
+                    acc1 = vfmaq_f32(acc1, av, vld1q_f32(brow.add(4)));
+                    acc2 = vfmaq_f32(acc2, av, vld1q_f32(brow.add(8)));
+                    acc3 = vfmaq_f32(acc3, av, vld1q_f32(brow.add(12)));
+                }
+                let cp = crow.as_mut_ptr().add(j);
+                vst1q_f32(cp, acc0);
+                vst1q_f32(cp.add(4), acc1);
+                vst1q_f32(cp.add(8), acc2);
+                vst1q_f32(cp.add(12), acc3);
+            }
+            j += 16;
+        }
+        while j < m {
+            let mut total = 0.0f32;
+            for kk in 0..k {
+                total = arow[kk].mul_add(b[kk * m + j], total);
+            }
+            crow[j] = total;
+            j += 1;
+        }
+    }
+}
+
+/// NEON conv1d: same im2col column buffer as the scalar model, but the
+/// accumulation is a k-ascending rank-1 update over the contiguous
+/// time axis (bias folded into the initial value).
+#[cfg(target_arch = "aarch64")]
+#[allow(clippy::too_many_arguments)]
+fn conv1d_neon(
+    input: &[f32],
+    channels: usize,
+    length: usize,
+    weight: &[f32],
+    bias: Option<&[f32]>,
+    filters: usize,
+    kernel: usize,
+    stride: usize,
+    pad: usize,
+) -> Vec<f32> {
+    use std::arch::aarch64::*;
+    let count = (length + 2 * pad - kernel) / stride + 1;
+    let k_total = channels * kernel;
+    let mut columns = vec![0.0f32; k_total * count];
+    for c in 0..channels {
+        for kw in 0..kernel {
+            let row = (c * kernel + kw) * count;
+            for t in 0..count {
+                let pos = t as isize * stride as isize + kw as isize - pad as isize;
+                if pos >= 0 && (pos as usize) < length {
+                    columns[row + t] = input[c * length + pos as usize];
+                }
+            }
+        }
+    }
+    let mut out = vec![0.0f32; filters * count];
+    for f in 0..filters {
+        let w_row = &weight[f * k_total..(f + 1) * k_total];
+        let init = bias.map(|b| b[f]).unwrap_or(0.0);
+        let orow = &mut out[f * count..(f + 1) * count];
+        orow.fill(init);
+        for kk in 0..k_total {
+            let w = w_row[kk];
+            let col = &columns[kk * count..(kk + 1) * count];
+            unsafe {
+                let wv = vdupq_n_f32(w);
+                let mut t = 0usize;
+                while t + 4 <= count {
+                    let cur = vld1q_f32(orow.as_ptr().add(t));
+                    let v = vfmaq_f32(cur, wv, vld1q_f32(col.as_ptr().add(t)));
+                    vst1q_f32(orow.as_mut_ptr().add(t), v);
+                    t += 4;
+                }
+                while t < count {
+                    orow[t] = w.mul_add(col[t], orow[t]);
+                    t += 1;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// `erf_mlas` on 4 lanes: both polynomial branches evaluated and
+/// blend-selected, exactly like the scalar form; the power-of-two
+/// scale is the exact f64 construction per lane.
+#[cfg(target_arch = "aarch64")]
+unsafe fn erf_vec(x: std::arch::aarch64::float32x4_t) -> std::arch::aarch64::float32x4_t {
+    use std::arch::aarch64::*;
+    let sign = vandq_u32(vreinterpretq_u32_f32(x), vdupq_n_u32(0x8000_0000));
+    let a = vminq_f32(vabsq_f32(x), vdupq_n_f32(3.925));
+    let z = vmulq_f32(a, a);
+    let mut rs = vdupq_n_f32(-5.99104969e-4f32);
+    for &c in &[4.99339588e-3f32, -2.67667342e-2, 1.12818025e-1, -3.76124859e-1, 1.28379151e-1] {
+        rs = vfmaq_f32(vdupq_n_f32(c), rs, z);
+    }
+    rs = vfmaq_f32(a, rs, a);
+    let mut rb = vdupq_n_f32(1.72948930e-5f32);
+    for &c in &[-3.83208680e-4f32, 3.88393435e-3, -2.42545605e-2, 1.06777847e-1, 6.34846687e-1, 1.28717512e-1] {
+        rb = vfmaq_f32(vdupq_n_f32(c), rb, a);
+    }
+    rb = vfmaq_f32(a, rb, a);
+    let rb = vmaxq_f32(vnegq_f32(rb), vdupq_n_f32(-88.3762626647949));
+    let t = vfmaq_f32(vdupq_n_f32(12582912.0), vdupq_n_f32(1.4426950408889634), rb);
+    let r = vsubq_f32(t, vdupq_n_f32(12582912.0));
+    let mut fx = vfmaq_f32(rb, vdupq_n_f32(-0.693145752), r);
+    fx = vfmaq_f32(fx, vdupq_n_f32(-1.42860677e-6), r);
+    let mut y = vdupq_n_f32(1.38319808e-3f32);
+    for &c in &[8.37550033e-3f32, 4.16689515e-2, 1.66664466e-1, 4.99999851e-1, 1.0, 1.0] {
+        y = vfmaq_f32(vdupq_n_f32(c), y, fx);
+    }
+    let yv = vsubq_f32(vdupq_n_f32(1.0), scale_pow2_vec(y, r));
+    let mask = vcleq_f32(a, vdupq_n_f32(0.921875));
+    let res = vbslq_f32(mask, rs, yv);
+    vreinterpretq_f32_u32(vorrq_u32(vreinterpretq_u32_f32(res), sign))
+}
+
+/// Elementwise erf (MLAS model) over a slice; NEON-vectorized on
+/// aarch64, the scalar function elsewhere.
+pub fn erf_mlas_slice(values: &mut [f32]) {
+    #[cfg(target_arch = "aarch64")]
+    {
+        use std::arch::aarch64::*;
+        let n = values.len();
+        let mut i = 0usize;
+        unsafe {
+            while i + 4 <= n {
+                let v = erf_vec(vld1q_f32(values.as_ptr().add(i)));
+                vst1q_f32(values.as_mut_ptr().add(i), v);
+                i += 4;
+            }
+        }
+        while i < n {
+            values[i] = erf_mlas(values[i]);
+            i += 1;
+        }
+        return;
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        for v in values.iter_mut() {
+            *v = erf_mlas(*v);
+        }
+    }
+}
+
+/// The encoder MLP's exact-erf GELU applied in place:
+/// v *= 0.5 * (erf(v / sqrt(2)) + 1). SQRT2 matches encoder.rs.
+pub fn gelu_erf_inplace(values: &mut [f32]) {
+    #[cfg(target_arch = "aarch64")]
+    {
+        use std::arch::aarch64::*;
+        const SQRT2: f32 = 1.4142135381698608f32; // bits 0x3fb504f3
+        let n = values.len();
+        let mut i = 0usize;
+        unsafe {
+            let sq = vdupq_n_f32(SQRT2);
+            while i + 4 <= n {
+                let v = vld1q_f32(values.as_ptr().add(i));
+                let e = erf_vec(vdivq_f32(v, sq));
+                let f = vmulq_f32(vdupq_n_f32(0.5), vaddq_f32(e, vdupq_n_f32(1.0)));
+                vst1q_f32(values.as_mut_ptr().add(i), vmulq_f32(v, f));
+                i += 4;
+            }
+        }
+        while i < n {
+            let e = erf_mlas(values[i] / SQRT2);
+            values[i] *= 0.5f32 * (e + 1.0f32);
+            i += 1;
+        }
+        return;
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        const SQRT2: f32 = 1.4142135381698608f32;
+        for v in values.iter_mut() {
+            let e = erf_mlas(*v / SQRT2);
+            *v *= 0.5f32 * (e + 1.0f32);
+        }
+    }
+}
+
+/// `logistic` on 4 lanes (identical rational polynomial, exact vector
+/// divide per lane).
+#[cfg(target_arch = "aarch64")]
+unsafe fn logistic_vec(x: std::arch::aarch64::float32x4_t) -> std::arch::aarch64::float32x4_t {
+    use std::arch::aarch64::*;
+    let c = vminq_f32(vmaxq_f32(x, vdupq_n_f32(-18.0)), vdupq_n_f32(18.0));
+    let v2 = vmulq_f32(c, c);
+    let mut p = vdupq_n_f32(4.37031012579801e-11f32);
+    for &k in &[1.15627324459942e-07f32, 6.08574864600143e-05, 8.51377133304701e-03, 2.48287947061529e-01] {
+        p = vfmaq_f32(vdupq_n_f32(k), p, v2);
+    }
+    p = vmulq_f32(p, c);
+    let mut q = vdupq_n_f32(6.10247389755681e-13f32);
+    for &k in &[5.76102136993427e-09f32, 6.29106785017040e-06, 1.70198817374094e-03, 1.16817656904453e-01, 9.93151921023180e-01] {
+        q = vfmaq_f32(vdupq_n_f32(k), q, v2);
+    }
+    let r = vaddq_f32(vdivq_f32(p, q), vdupq_n_f32(0.5));
+    vminq_f32(vmaxq_f32(r, vdupq_n_f32(0.0)), vdupq_n_f32(1.0))
+}
+
 pub fn gemm_nn(a: &[f32], n: usize, k: usize, b: &[f32], m: usize, c: &mut [f32]) {
+    #[cfg(target_arch = "aarch64")]
+    {
+        gemm_nn_neon(a, n, k, b, m, c);
+        return;
+    }
     let stride_k = sgemm_stride_k(m, k);
     for t in 0..n {
         for j in 0..m {
@@ -210,6 +618,10 @@ pub fn conv1d(
     stride: usize,
     pad: usize,
 ) -> Vec<f32> {
+    #[cfg(target_arch = "aarch64")]
+    {
+        return conv1d_neon(input, channels, length, weight, bias, filters, kernel, stride, pad);
+    }
     let count = (length + 2 * pad - kernel) / stride + 1;
     let k_total = channels * kernel;
     // Column buffer, [k_total][count] like the MLAS working buffer.
@@ -298,8 +710,30 @@ pub fn tanh_mlas(x: f32) -> f32 {
 }
 
 pub fn silu_inplace(values: &mut [f32]) {
-    for v in values.iter_mut() {
-        *v = *v * logistic(*v);
+    #[cfg(target_arch = "aarch64")]
+    {
+        use std::arch::aarch64::*;
+        let n = values.len();
+        let mut i = 0usize;
+        unsafe {
+            while i + 4 <= n {
+                let v = vld1q_f32(values.as_ptr().add(i));
+                let r = vmulq_f32(v, logistic_vec(v));
+                vst1q_f32(values.as_mut_ptr().add(i), r);
+                i += 4;
+            }
+        }
+        while i < n {
+            values[i] = values[i] * logistic(values[i]);
+            i += 1;
+        }
+        return;
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        for v in values.iter_mut() {
+            *v = *v * logistic(*v);
+        }
     }
 }
 
@@ -356,6 +790,11 @@ pub fn sumexp_exp(v_in: f32) -> f32 {
 /// Probe-validated bit-for-bit on 288 rows / 50,304 elements including
 /// -inf masked patterns (Gate 3 log).
 pub fn softmax_row(row: &mut [f32]) {
+    #[cfg(target_arch = "aarch64")]
+    {
+        softmax_row_neon(row);
+        return;
+    }
     let mut max = f32::NEG_INFINITY;
     for &x in row.iter() {
         if x > max {

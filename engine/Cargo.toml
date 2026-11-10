@@ -7,5 +7,15 @@ edition = "2021"
 name = "transcribro_standalone"
 crate-type = ["cdylib", "rlib"]
 
+[dependencies]
+memmap2 = "0.9"
+ruzstd = { version = "0.8", features = ["std"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.22"
+
+[target.'cfg(all(target_os = "android", target_arch = "aarch64"))'.dependencies]
+libc = "0.2"
+
 [profile.release]
 opt-level = 3

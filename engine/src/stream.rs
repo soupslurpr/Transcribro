@@ -377,10 +377,22 @@ impl Stream {
         })
     }
 
+    pub(crate) fn from_backing(
+        backing: std::sync::Arc<crate::model::Backing>,
+        tokenizer: &[u8],
+    ) -> Result<Stream, String> {
+        let model = Model::from_backing(backing)?;
+        Stream::assemble(model, tokenizer)
+    }
+
     fn from_paths(archive: &str, tokenizer: &str) -> Result<Stream, String> {
-        let data =
-            std::fs::read(archive).map_err(|_| "cannot open model archive".to_string())?;
-        let model = Model::from_bytes(&data)?;
+        let file = std::fs::File::open(archive)
+            .map_err(|_| "cannot open model archive".to_string())?;
+        let map = unsafe { memmap2::Mmap::map(&file) }
+            .map_err(|_| "cannot map model archive".to_string())?;
+        let len = map.len();
+        let backing = std::sync::Arc::new(crate::model::Backing::from_mmap(map, 0, len));
+        let model = Model::from_backing(backing)?;
         let metadata =
             std::fs::metadata(tokenizer).map_err(|_| "tokenizer extent".to_string())?;
         if metadata.len() == 0 || metadata.len() >= 1024 * 1024 {
@@ -390,7 +402,7 @@ impl Stream {
         Stream::assemble(model, &bytes)
     }
 
-    fn from_memory(archive: &[u8], tokenizer: &[u8]) -> Result<Stream, String> {
+    pub(crate) fn from_memory(archive: &[u8], tokenizer: &[u8]) -> Result<Stream, String> {
         let model = Model::from_bytes(archive)?;
         Stream::assemble(model, tokenizer)
     }
@@ -425,7 +437,7 @@ impl Stream {
         Ok(valid_text(trim_bytes(&text)))
     }
 
-    fn reset(&mut self, keep_vad: bool) {
+    pub(crate) fn reset(&mut self, keep_vad: bool) {
         if !keep_vad {
             self.vad = zero_vad();
         }
@@ -444,7 +456,7 @@ impl Stream {
         self.sequence.reset();
     }
 
-    fn push(&mut self, audio: &[f32]) -> Result<(), String> {
+    pub(crate) fn push(&mut self, audio: &[f32]) -> Result<(), String> {
         if self.finished || self.failed {
             return Err("stream is not accepting audio".into());
         }
@@ -461,7 +473,8 @@ impl Stream {
         Ok(())
     }
 
-    fn update(&mut self, final_: bool, previews: bool) -> Result<(), String> {
+    pub(crate) fn update(&mut self, final_: bool, previews: bool) -> Result<(), String> {
+        let _big_cores = crate::affinity::big_cores();
         if self.finished || self.failed {
             return Err("stream is finished or failed".into());
         }
@@ -472,6 +485,18 @@ impl Stream {
                 Err(message)
             }
         }
+    }
+
+    pub(crate) fn segment_count(&self) -> usize {
+        self.segments.len()
+    }
+
+    pub(crate) fn segment_text(&self, index: usize) -> Option<&std::ffi::CStr> {
+        self.segments.get(index).map(|s| s.text.as_c_str())
+    }
+
+    pub(crate) fn segment_complete(&self, index: usize) -> bool {
+        self.segments.get(index).map(|s| s.complete).unwrap_or(false)
     }
 
     fn update_impl(&mut self, final_: bool, previews: bool) -> Result<(), String> {

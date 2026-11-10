@@ -5,6 +5,9 @@
 //!   transcribro-prepare sources --cache DIR --output DIR [--offline]
 //!   transcribro-prepare model   --cache DIR --output DIR --sources DIR [--offline]
 //!   transcribro-prepare convert --models DIR --output FILE --vad-header FILE [--packed-head]
+//!   transcribro-prepare convert-v2 [--input] IN.trm [--output] OUT.trm2
+//!                                 (TRMED001 -> TRMED002, Gate 6 S1; a separate
+//!                                 verify_trmed002 binary checks the result)
 //!   transcribro-prepare dump    --models DIR --vad-header FILE   (dev aid:
 //!                                 per-initializer/node JSON for oracle diffs)
 //!
@@ -15,6 +18,7 @@
 //! replace, offline cache-miss failure — is enforced here, as in prepare.py.
 
 mod convert;
+mod convert_v2;
 mod fbs;
 mod ort;
 mod prepare;
@@ -94,6 +98,31 @@ fn dispatch(args: &[String]) -> Result<String, String> {
                 return Err("model preparation requires --sources".into());
             }
             prepare::run(cmd, &p)
+        }
+        "convert-v2" => {
+            // Path args, positional or flagged:
+            //   convert-v2 IN.trm OUT.trm2
+            //   convert-v2 --input IN.trm --output OUT.trm2
+            let (input, output) = match (flag(rest, "--input"), flag(rest, "--output")) {
+                (Some(i), Some(o)) => (PathBuf::from(i), PathBuf::from(o)),
+                (None, None) => {
+                    let mut pos: Vec<&str> = Vec::new();
+                    let mut it = rest.iter();
+                    while let Some(a) = it.next() {
+                        if a == "--root" {
+                            it.next();
+                        } else if !a.starts_with("--") {
+                            pos.push(a.as_str());
+                        }
+                    }
+                    if pos.len() != 2 {
+                        return Err("usage: convert-v2 [--input] IN.trm [--output] OUT.trm2".into());
+                    }
+                    (PathBuf::from(pos[0]), PathBuf::from(pos[1]))
+                }
+                _ => return Err("convert-v2 needs both --input and --output, or two positional paths".into()),
+            };
+            convert_v2::run_convert_v2(&input, &output)
         }
         "dump" => dump(rest),
         _ => Err(format!("unknown subcommand {cmd}")),

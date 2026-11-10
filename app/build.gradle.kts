@@ -59,7 +59,7 @@ android {
         resValues = true
     }
     androidResources {
-        noCompress += listOf("bin", "zst")
+        noCompress += listOf("bin", "zst", "trm")
         localeFilters += "en"
     }
     buildTypes {

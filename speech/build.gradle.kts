@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins { id("com.android.library") }
 
 val nativeSources = layout.buildDirectory.dir("generated/native")
@@ -6,6 +8,7 @@ val nativeCache = rootProject.layout.projectDirectory.dir(".gradle/native-inputs
 val inputLock = layout.projectDirectory.file("native-inputs.lock.json")
 val prepareToolProject = rootProject.layout.projectDirectory.dir("tools")
 val prepareTool = prepareToolProject.file("target/release/transcribro-prepare")
+val engineProject = rootProject.layout.projectDirectory.dir("engine")
 
 // Gate 1 of the Kotlin+Rust rewrite: prepare.py + import_model.py are
 // replaced by the Rust tool in /tools (byte-identical outputs; the Python
@@ -54,10 +57,67 @@ val prepareMediumModel = tasks.register<Exec>("prepareMediumModel") {
     if (gradle.startParameter.isOffline) args("--offline")
 }
 
-tasks.configureEach {
-    if (name.startsWith("configureCMake") || name.startsWith("buildCMake")) {
-        dependsOn(prepareNativeSources)
+// Gate 6 of the Kotlin+Rust rewrite: the product native library is the
+// pure-Rust engine in /engine (JNI cdylib), built per ABI with cargo and
+// the NDK clang linkers. The C++/CMake/whisper.cpp build is gone from
+// the product; its sources remain in the tree as the reference oracle
+// until Gate 7.
+val cargoBinary = listOf(
+    File(System.getProperty("user.home"), ".cargo/bin/cargo"),
+    File("/usr/bin/cargo"),
+).firstOrNull { it.canExecute() } ?: File("cargo")
+
+data class RustAbi(val abi: String, val triple: String, val clangPrefix: String)
+
+val rustAbis = listOf(
+    RustAbi("arm64-v8a", "aarch64-linux-android", "aarch64"),
+    RustAbi("x86_64", "x86_64-linux-android", "x86_64"),
+)
+
+val sdkDir = run {
+    val props = Properties()
+    val lp = rootProject.file("local.properties")
+    if (lp.exists()) lp.inputStream().use { props.load(it) }
+    File(
+        props.getProperty("sdk.dir")
+            ?: File(System.getProperty("user.home"), "android-sdk").absolutePath,
+    )
+}
+val ndkDir = sdkDir.resolve("ndk/30.0.16248370")
+
+val rustEngineTasks = rustAbis.map { target ->
+    val suffix = target.abi.replace("-", "").replaceFirstChar { it.uppercase() }
+    val buildTask = tasks.register<Exec>("buildRustEngine$suffix") {
+        inputs.dir(engineProject.dir("src"))
+        inputs.file(engineProject.file("Cargo.toml"))
+        inputs.file(engineProject.file("Cargo.lock"))
+        val lib = engineProject.file("target/${target.triple}/release/libtranscribro_standalone.so")
+        outputs.file(lib)
+        val linker = ndkDir.resolve(
+            "toolchains/llvm/prebuilt/linux-x86_64/bin/${target.clangPrefix}-linux-android37-clang",
+        )
+        environment(
+            "CARGO_TARGET_${target.triple.uppercase().replace('-', '_')}_LINKER",
+            linker.absolutePath,
+        )
+        commandLine(
+            cargoBinary, "build", "--release", "--locked",
+            "--target", target.triple,
+            "--manifest-path", engineProject.file("Cargo.toml").asFile,
+        )
     }
+    tasks.register<Copy>("stageRustEngine$suffix") {
+        dependsOn(buildTask)
+        from(engineProject.dir("target/${target.triple}/release")) {
+            include("libtranscribro_standalone.so")
+            rename { "libtranscribro.so" }
+        }
+        into(layout.projectDirectory.dir("src/main/jniLibs/${target.abi}"))
+    }
+}
+
+val buildRustEngines = tasks.register("buildRustEngines") {
+    dependsOn(rustEngineTasks)
 }
 
 android {
@@ -73,28 +133,12 @@ android {
                 abiFilters += it.split(",")
             }
         }
-        externalNativeBuild {
-            cmake {
-                targets += "transcribro"
-                arguments += listOf(
-                    "-DANDROID_STL=c++_static", "-DCMAKE_BUILD_TYPE=Release",
-                    "-DORT_SOURCE=${nativeSources.get().asFile}/mlas",
-                    "-DEIGEN_SOURCE=${nativeSources.get().asFile}/eigen",
-                    "-DZSTD_SOURCE=${nativeSources.get().asFile}/zstd",
-                    "-DWHISPER_ROOT=${nativeSources.get().asFile}/whisper",
-                )
-            }
-        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
-            version = "3.22.1"
-        }
-    }
     buildTypes { create("staging") { initWith(getByName("release")) } }
 }
+
+tasks.named("preBuild") { dependsOn(buildRustEngines) }

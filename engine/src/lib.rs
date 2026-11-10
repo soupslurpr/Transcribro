@@ -2,16 +2,23 @@
 //! Gates 2-4: archive parsing, frontend, inner VAD, encoder, adapter,
 //! cross-KV, decoder and the `ts_*` streaming layer are implemented.
 
+mod affinity;
 mod archive;
 mod decoder;
 mod encoder;
 mod frontend;
+#[cfg(target_os = "android")]
+mod jni_bridge;
 mod kernels;
 mod model;
+mod outer_vad;
+mod pool;
 mod stream;
 mod vad;
 
-use model::Model;
+pub use outer_vad::OuterVad;
+
+use model::{Backing, Model};
 use std::cell::RefCell;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_void};
@@ -90,14 +97,28 @@ pub extern "C" fn tm_create(
     bytes: usize,
 ) -> *mut c_void {
     let result = catch_unwind(AssertUnwindSafe(|| -> Result<Model, String> {
+        let _big_cores = crate::affinity::big_cores();
         if path.is_null() {
             return Err("null archive path".into());
         }
         let path = unsafe { CStr::from_ptr(path) }
             .to_str()
             .map_err(|_| "invalid archive path".to_string())?;
-        let data = std::fs::read(path).map_err(|_| "cannot open model archive".to_string())?;
-        Model::from_bytes(&data)
+        // Gate 6: map the archive file instead of reading it; a
+        // TRMED002 model then borrows its weights from the mapping.
+        let file = std::fs::File::open(path)
+            .map_err(|_| "cannot open model archive".to_string())?;
+        match unsafe { memmap2::Mmap::map(&file) } {
+            Ok(map) => {
+                let len = map.len();
+                Model::from_backing(std::sync::Arc::new(Backing::from_mmap(map, 0, len)))
+            }
+            Err(_) => {
+                let data = std::fs::read(path)
+                    .map_err(|_| "cannot open model archive".to_string())?;
+                Model::from_bytes(&data)
+            }
+        }
     }));
     match result {
         Ok(Ok(model)) => Box::into_raw(Box::new(model)) as *mut c_void,
@@ -166,6 +187,7 @@ pub extern "C" fn tm_frontend(
     capacity: usize,
     frames: *mut usize,
 ) -> i32 {
+    let _big_cores = crate::affinity::big_cores();
     guard(|| {
         let model = model_ref(model)?;
         if state.is_null() {
@@ -252,6 +274,7 @@ pub extern "C" fn tm_decoder_cached(
     frames: usize,
     predictions: *mut i64,
 ) -> i32 {
+    let _big_cores = crate::affinity::big_cores();
     guard(|| {
         let model = model_ref(model)?;
         if cache.is_null() || predictions.is_null() || count == 0 || count > 257 {
@@ -282,6 +305,7 @@ pub extern "C" fn tm_encoder(
     frames: usize,
     output: *mut f32,
 ) -> i32 {
+    let _big_cores = crate::affinity::big_cores();
     guard(|| {
         let model = model_ref(model)?;
         if input.is_null() || output.is_null() {
@@ -307,6 +331,7 @@ pub extern "C" fn tm_adapter(
     offset: usize,
     output: *mut f32,
 ) -> i32 {
+    let _big_cores = crate::affinity::big_cores();
     guard(|| {
         let model = model_ref(model)?;
         if input.is_null() || output.is_null() {
@@ -332,6 +357,7 @@ pub extern "C" fn tm_cross(
     keys: *mut f32,
     values: *mut f32,
 ) -> i32 {
+    let _big_cores = crate::affinity::big_cores();
     guard(|| {
         let model = model_ref(model)?;
         if input.is_null() || keys.is_null() || values.is_null() {
@@ -366,6 +392,7 @@ pub extern "C" fn tm_decoder(
     out_keys: *mut f32,
     out_values: *mut f32,
 ) -> i32 {
+    let _big_cores = crate::affinity::big_cores();
     guard(|| {
         let model = model_ref(model)?;
         let _lock = model.mutex.lock().unwrap();

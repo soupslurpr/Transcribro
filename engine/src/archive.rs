@@ -16,6 +16,10 @@ pub struct Tensor {
 pub struct ParsedArchive<'a> {
     data: &'a [u8],
     pub tensors: HashMap<String, Tensor>,
+    /// TRMED002 stores projection weights pre-unpacked in natural
+    /// [k][n] order (Gate 6 format v2); TRMED001 stores them in the
+    /// layout-8 packing the loader must undo.
+    pub natural_weights: bool,
 }
 
 fn le_u32(d: &[u8], o: usize) -> u32 {
@@ -30,9 +34,13 @@ pub fn parse(data: &[u8]) -> Result<ParsedArchive<'_>, String> {
     if length < 64 || length > 1024 * 1024 * 1024 {
         return Err("archive memory extent or alignment".into());
     }
-    if &data[0..8] != b"TRMED001" || le_u32(data, 8) != 1 {
+    let natural_weights = if &data[0..8] == b"TRMED001" && le_u32(data, 8) == 1 {
+        false
+    } else if &data[0..8] == b"TRMED002" && le_u32(data, 8) == 2 {
+        true
+    } else {
         return Err("unsupported archive".into());
-    }
+    };
     if le_u64(data, 16) != length as u64 || le_u64(data, 24) != 64 {
         return Err("archive header mismatch".into());
     }
@@ -95,7 +103,7 @@ pub fn parse(data: &[u8]) -> Result<ParsedArchive<'_>, String> {
     if tensors.len() != 1230 {
         return Err("unexpected Medium tensor count".into());
     }
-    Ok(ParsedArchive { data, tensors })
+    Ok(ParsedArchive { data, tensors, natural_weights })
 }
 
 impl<'a> ParsedArchive<'a> {
@@ -115,6 +123,9 @@ impl<'a> ParsedArchive<'a> {
             }
         }
         Ok(t)
+    }
+    pub fn tensor_data(&self, t: &Tensor) -> &'a [u8] {
+        &self.data[t.offset..t.offset + t.bytes]
     }
     pub fn f32_vec(&self, t: &Tensor) -> Vec<f32> {
         let raw = &self.data[t.offset..t.offset + t.bytes];

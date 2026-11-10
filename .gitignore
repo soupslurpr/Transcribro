@@ -19,3 +19,7 @@ local.properties
 
 # Rust host tools (Gate 1 of the Kotlin+Rust rewrite)
 /tools/target/
+
+# Rust engine build outputs staged for packaging (Gate 6)
+/speech/src/main/jniLibs/
+/engine/target/

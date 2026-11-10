@@ -65,10 +65,7 @@ fn attention(
         let v = &values[h * head_stride..h * head_stride + memory * 64];
         for r in 0..rows {
             for c in 0..memory {
-                let mut total = 0.0f32;
-                for j in 0..64 {
-                    total = q[r * 64 + j].mul_add(k[c * 64 + j], total);
-                }
+                let total = kernels::dot_asc(&q[r * 64..(r + 1) * 64], &k[c * 64..(c + 1) * 64]);
                 scores[r * memory + c] = ATTN_SCALE * total;
             }
         }
@@ -82,11 +79,41 @@ fn attention(
             kernels::softmax_row(row);
         }
         if rows == 1 {
-            // MLAS dispatches M == 1 NoTrans SGEMM to the M1 kernel
-            // (kernels::m1_dot; Gate 4 probe fit at K in {2, 17, 33, 224,
-            // 602}, Gate 5b correction for K % 4 == 3 - see kernels.rs).
-            for j in 0..64 {
-                out[h * 64 + j] = kernels::m1_dot(&scores, v, j, 64, 0.0, false);
+            #[cfg(target_arch = "aarch64")]
+            {
+                // Rank-1 form of the same accumulation: out[j] =
+                // sum_c scores[c] * v[c * 64 + j], c ascending, NEON
+                // over the contiguous value rows, one accumulator per
+                // 4-element position block.
+                use std::arch::aarch64::*;
+                let orow = &mut out[h * 64..(h + 1) * 64];
+                unsafe {
+                    let mut acc = [vdupq_n_f32(0.0); 16];
+                    for c in 0..memory {
+                        let s = scores[c];
+                        if s == 0.0 {
+                            continue;
+                        }
+                        let sv = vdupq_n_f32(s);
+                        let vrow = v.as_ptr().add(c * 64);
+                        for i in 0..16 {
+                            acc[i] = vfmaq_f32(acc[i], sv, vld1q_f32(vrow.add(4 * i)));
+                        }
+                    }
+                    for i in 0..16 {
+                        vst1q_f32(orow.as_mut_ptr().add(4 * i), acc[i]);
+                    }
+                }
+            }
+            #[cfg(not(target_arch = "aarch64"))]
+            {
+                // MLAS dispatches M == 1 NoTrans SGEMM to the M1 kernel
+                // (kernels::m1_dot; Gate 4 probe fit at K in {2, 17, 33,
+                // 224, 602}, Gate 5b correction for K % 4 == 3 - see
+                // kernels.rs).
+                for j in 0..64 {
+                    out[h * 64 + j] = kernels::m1_dot(&scores, v, j, 64, 0.0, false);
+                }
             }
         } else {
             kernels::gemm_nn(
@@ -107,14 +134,80 @@ fn attention(
 /// tiled head matrix. At rows == 1 MLAS takes the M1 kernel
 /// (kernels::m1_dot; probe-fitted at Gates 4/5b, 0 mismatches; gemm_nn
 /// fails 120 of 128 elements there).
-fn head_block(model: &Model, normalized: &[f32], rows: usize, column: usize, block: &mut [f32]) {
-    let b = &model.head[column * 640..column * 640 + 640 * 128];
-    if rows == 1 {
-        for j in 0..128 {
-            block[j] = kernels::m1_dot(normalized, b, j, 128, 0.0, false);
+/// Head logit dot: sum_k x[k] * (code[k] - zero). NEON form on
+/// aarch64 (4 partial accumulators over the 640-wide row, codes
+/// widened u8 -> f32 in registers); the plain ascending sum elsewhere.
+#[cfg(target_arch = "aarch64")]
+fn head_dot(x: &[f32], codes: &[u8], zero: i32) -> f32 {
+    use std::arch::aarch64::*;
+    unsafe {
+        let zv = vdupq_n_f32(zero as f32);
+        let mut acc0 = vdupq_n_f32(0.0);
+        let mut acc1 = vdupq_n_f32(0.0);
+        let mut acc2 = vdupq_n_f32(0.0);
+        let mut acc3 = vdupq_n_f32(0.0);
+        let mut j = 0usize;
+        while j + 16 <= x.len() {
+            let c16 = vld1q_u8(codes.as_ptr().add(j));
+            let lo16 = vmovl_u8(vget_low_u8(c16));
+            let hi16 = vmovl_u8(vget_high_u8(c16));
+            let q0 = vsubq_f32(vcvtq_f32_s32(vreinterpretq_s32_u32(vmovl_u16(vget_low_u16(lo16)))), zv);
+            let q1 = vsubq_f32(vcvtq_f32_s32(vreinterpretq_s32_u32(vmovl_u16(vget_high_u16(lo16)))), zv);
+            let q2 = vsubq_f32(vcvtq_f32_s32(vreinterpretq_s32_u32(vmovl_u16(vget_low_u16(hi16)))), zv);
+            let q3 = vsubq_f32(vcvtq_f32_s32(vreinterpretq_s32_u32(vmovl_u16(vget_high_u16(hi16)))), zv);
+            acc0 = vfmaq_f32(acc0, vld1q_f32(x.as_ptr().add(j)), q0);
+            acc1 = vfmaq_f32(acc1, vld1q_f32(x.as_ptr().add(j + 4)), q1);
+            acc2 = vfmaq_f32(acc2, vld1q_f32(x.as_ptr().add(j + 8)), q2);
+            acc3 = vfmaq_f32(acc3, vld1q_f32(x.as_ptr().add(j + 12)), q3);
+            j += 16;
         }
-    } else {
-        kernels::gemm_nn(normalized, rows, 640, b, 128, block);
+        let s = vaddq_f32(vaddq_f32(acc0, acc1), vaddq_f32(acc2, acc3));
+        let mut lanes = [0.0f32; 4];
+        vst1q_f32(lanes.as_mut_ptr(), s);
+        let mut total = (lanes[0] + lanes[1]) + (lanes[2] + lanes[3]);
+        while j < x.len() {
+            total += x[j] * (codes[j] as i32 - zero) as f32;
+            j += 1;
+        }
+        total
+    }
+}
+
+#[cfg(not(target_arch = "aarch64"))]
+fn head_dot(x: &[f32], codes: &[u8], zero: i32) -> f32 {
+    let mut sum = 0.0f32;
+    for k in 0..x.len() {
+        sum += x[k] * (codes[k] as i32 - zero) as f32;
+    }
+    sum
+}
+
+fn head_block(model: &Model, normalized: &[f32], rows: usize, column: usize, block: &mut [f32]) {
+    match &model.head {
+        crate::model::HeadStore::Tiled(head) => {
+            let b = &head[column * 640..column * 640 + 640 * 128];
+            if rows == 1 {
+                for j in 0..128 {
+                    block[j] = kernels::m1_dot(normalized, b, j, 128, 0.0, false);
+                }
+            } else {
+                kernels::gemm_nn(normalized, rows, 640, b, 128, block);
+            }
+        }
+        crate::model::HeadStore::Codes { codes, scale, zero } => {
+            // CompactHead form (aarch64): logit(v) = sum_j x_j *
+            // (code(v, j) - zero) * scale, evaluated per vocab row in
+            // ascending j -- plain f32 accumulation (the aarch64 path
+            // has no bit-exactness bar; see GATE6.md S5).
+            for r in 0..rows {
+                let x = &normalized[r * 640..(r + 1) * 640];
+                for j in 0..128 {
+                    let v = column + j;
+                    let crow = &codes[v * 640..(v + 1) * 640];
+                    block[r * 128 + j] = head_dot(x, crow, *zero) * scale;
+                }
+            }
+        }
     }
 }
 
