@@ -115,11 +115,117 @@ pub struct Matrix {
     pub scales: Vec<f32>,     // [n]
     pub zeros: Vec<i32>,      // [n], zero point - 128
     pub bias: Vec<f32>,       // [n]
+    /// Round-4 int4 twin (GEMV path only); built at load for the
+    /// decoder matrices when TS_DEC_INT4 is on. See Int4Matrix.
+    pub int4: Option<Int4Matrix>,
 }
 
 impl Matrix {
     pub fn weights(&self) -> &[i8] {
         self.weights.as_slice()
+    }
+}
+
+/// Round-4 int4 engagement (speed program): TS_DEC_INT4 set and
+/// not "0". Default OFF; adoption is a separate gated ruling.
+pub fn dec_int4_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var("TS_DEC_INT4").map(|v| v != "0").unwrap_or(false)
+    })
+}
+
+/// Group size (consecutive k values per scale) for int4 weights.
+pub const INT4_GROUP: usize = 64;
+
+/// Int4 twin of a Matrix for the rows==1 GEMV path: the
+/// dequantized weights re-quantized symmetrically to 4 bits per
+/// (group of INT4_GROUP consecutive k, column), packed as nibbles
+/// in the flat operand order the int4 GEMV kernel consumes
+/// (block b = column-group * (k/4) + depth-block; within a block,
+/// t = dc*4 + lane maps to (j = (b%(k/4))*4 + lane, c = cg*4+dc);
+/// flat position p -> byte p/2, low nibble if p even).
+pub struct Int4Matrix {
+    pub k: usize,
+    pub n: usize,
+    pub group: usize,
+    /// Nibbles, length k*n/2 + 16 pad bytes (kernel over-read).
+    pub packed: Vec<u8>,
+    /// Per-(group, column) scales, [g][c] group-major.
+    pub gscales: Vec<f32>,
+    /// colsums[c] = sum_j W4[j][c] (dequantized int4 weights).
+    pub colsums: Vec<f32>,
+    pub bias: Vec<f32>,
+}
+
+impl Int4Matrix {
+    pub fn from_matrix(m: &Matrix) -> Int4Matrix {
+        let (k, n, g) = (m.k, m.n, INT4_GROUP);
+        assert!(k % g == 0 && n % 4 == 0 && k % 4 == 0);
+        let ngroups = k / g;
+        let w = m.weights();
+        let mut gscales = vec![0.0f32; ngroups * n];
+        let mut colsums = vec![0.0f32; n];
+        // q4 codes in natural [j][c] order first.
+        let mut q4 = vec![0i8; k * n];
+        for c in 0..n {
+            let sc = m.scales[c];
+            let zc = m.zeros[c];
+            for gi in 0..ngroups {
+                let mut mx = 0.0f32;
+                for j in gi * g..(gi + 1) * g {
+                    let wv = (w[j * n + c] as i32 - zc) as f32 * sc;
+                    if wv.abs() > mx {
+                        mx = wv.abs();
+                    }
+                }
+                let sg = if mx > 0.0 { mx / 7.0 } else { 1.0 };
+                gscales[gi * n + c] = sg;
+                let mut qsum = 0i32;
+                for j in gi * g..(gi + 1) * g {
+                    let wv = (w[j * n + c] as i32 - zc) as f32 * sc;
+                    let q = (wv / sg).round_ties_even().clamp(-8.0, 7.0) as i8;
+                    q4[j * n + c] = q;
+                    qsum += q as i32;
+                }
+                colsums[c] += sg * qsum as f32;
+            }
+        }
+        // Pack into the kernel's flat operand order.
+        let total = k * n;
+        let mut packed = vec![0u8; total / 2 + 16];
+        let blocks_per_cg = k / 4;
+        for b in 0..(n / 4) * blocks_per_cg {
+            let cg = b / blocks_per_cg;
+            let jb = b % blocks_per_cg;
+            for t in 0..16usize {
+                let dc = t / 4;
+                let lane = t % 4;
+                let j = jb * 4 + lane;
+                let c = cg * 4 + dc;
+                let u = (q4[j * n + c] + 8) as u8;
+                let pos = b * 16 + t;
+                if pos % 2 == 0 {
+                    packed[pos / 2] |= u;
+                } else {
+                    packed[pos / 2] |= u << 4;
+                }
+            }
+        }
+        Int4Matrix { k, n, group: g, packed, gscales, colsums, bias: m.bias.clone() }
+    }
+
+    /// Dequantized int4 weight at (j, c); test/reference use.
+    pub fn weight_at(&self, j: usize, c: usize) -> f32 {
+        let gi = j / self.group;
+        let cg = c / 4;
+        let dc = c % 4;
+        let jb = j / 4;
+        let lane = j % 4;
+        let pos = (cg * (self.k / 4) + jb) * 16 + dc * 4 + lane;
+        let byte = self.packed[pos / 2];
+        let u = if pos % 2 == 0 { byte & 0x0F } else { byte >> 4 };
+        (u as i32 - 8) as f32 * self.gscales[gi * self.n + c]
     }
 }
 
@@ -304,6 +410,7 @@ fn load_matrix(
         scales,
         zeros: zero_u8.iter().map(|&z| z as i32 - 128).collect(),
         bias,
+        int4: None,
     })
 }
 
@@ -325,6 +432,11 @@ pub struct Model {
     pub embedding_scale: f32,
     pub embedding_zero: i32,
     pub head: HeadStore,
+    /// Speed round 3 (lever 8): the head as a projection
+    /// Matrix over its own int8 codes ([640][32768], tied
+    /// embedding), for the env-gated int8 head path in the
+    /// decoder. None when the head store carries no codes.
+    pub head_matrix: Option<Matrix>,
     pub mutex: Mutex<()>,
     /// The archive backing, kept alive while any matrix borrows from
     /// it (v2 zero-copy path). None for the copy-based constructors.
@@ -381,6 +493,63 @@ fn dequant_per_output(
         }
     }
     Ok(out)
+}
+
+/// Build the head's projection Matrix from its u8 codes
+/// ([vocab][640], tied embedding): weights stored [j][v] as
+/// code - 128, per-column scale replicated, zeros = zero - 128,
+/// so project_s's epilogue reproduces
+/// scale * sum_j (a_j - za) * (code_j - zero) exactly in i32
+/// (the only deviation from the f32 head is the activation
+/// quantization of the normalized row, as in every encoder
+/// projection).
+fn build_head_matrix(codes: &[u8], scale: f32, zero: i32) -> Matrix {
+    let (k, n) = (640usize, 32768usize);
+    let mut w = vec![0i8; k * n];
+    let mut sums = vec![0i32; n];
+    for v in 0..n {
+        let row = &codes[v * k..(v + 1) * k];
+        let mut sm = 0i32;
+        for j in 0..k {
+            let c = (row[j] as i32 - 128) as i8;
+            w[j * n + v] = c;
+            sm += c as i32;
+        }
+        sums[v] = sm;
+    }
+    let packed_mmla = {
+        #[cfg(target_arch = "aarch64")]
+        {
+            WeightStore::Owned(pack_mmla(&w, k, n))
+        }
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            WeightStore::Owned(Vec::new())
+        }
+    };
+    let packed_gemv = {
+        #[cfg(target_arch = "aarch64")]
+        {
+            WeightStore::Owned(pack_gemv(&w, k, n))
+        }
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            WeightStore::Owned(Vec::new())
+        }
+    };
+    Matrix {
+        k,
+        n,
+        weights: WeightStore::Owned(w),
+        packed_sdot: WeightStore::Owned(Vec::new()),
+        packed_mmla,
+        packed_gemv,
+        sums,
+        scales: vec![scale; n],
+        zeros: vec![zero - 128; n],
+        bias: vec![0.0; n],
+        int4: None,
+    }
 }
 
 impl Model {
@@ -502,6 +671,14 @@ impl Model {
                 )?);
             }
         }
+        // Round 4: int4 twins for the decoder GEMV path (env-gated).
+        if dec_int4_enabled() {
+            for m in decoder_matrices.iter_mut() {
+                if m.k % INT4_GROUP == 0 && m.n % 4 == 0 {
+                    m.int4 = Some(Int4Matrix::from_matrix(m));
+                }
+            }
+        }
         let mut decoder_norms = Vec::with_capacity(43);
         for i in 0..43 {
             decoder_norms.push(parsed.f32_of(&format!("decoder/norm/{i}"), &[640])?);
@@ -611,6 +788,12 @@ impl Model {
             )))
         };
 
+        let head_matrix = match &head {
+            HeadStore::Codes { codes, scale, zero, .. } => {
+                Some(build_head_matrix(codes.as_slice(), *scale, *zero))
+            }
+            _ => None,
+        };
         Ok(Model {
             frontend: FrontendWeights { linear, conv1, conv2, conv1_bias, conv2_bias },
             vad: VadWeights {
@@ -639,6 +822,7 @@ impl Model {
             embedding_scale,
             embedding_zero,
             head,
+            head_matrix,
             mutex: Mutex::new(()),
             _backing: backing,
         })

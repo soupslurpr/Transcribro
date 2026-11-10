@@ -29,6 +29,18 @@ pub struct Quantized {
     zero: i32,
 }
 
+impl Quantized {
+    /// Dequantized values of one row under the epilogue's algebra:
+    /// (values + 128 - zero) * scale, elementwise. Used by the
+    /// TS_HEAD_PROBE activation evidence (decoder.rs).
+    pub fn dequantized_row(&self, row: usize, k: usize) -> Vec<f32> {
+        let base = row * k;
+        (0..k)
+            .map(|j| (self.values[base + j] as i32 + 128 - self.zero) as f32 * self.scale)
+            .collect()
+    }
+}
+
 /// projection.h `quantize` (x86 path): min/max over the whole block seeded
 /// with 0.0, scale = (high - low) / 255 (0 -> 1), zero = clamp(nearbyint(
 /// -low / scale), 0, 255), per element nearbyint(x / scale) first, then
@@ -111,6 +123,266 @@ pub fn quantize(x: &[f32], rows: usize, k: usize) -> Result<Quantized, String> {
         }
     }
     _pt.stop(&crate::prof::QUANT_NS);
+    Ok(Quantized { values, centered_sums, scale, zero })
+}
+
+/// The scale/zero derivation from `quantize`, duplicated so
+/// `quantize` itself stays byte-identical; the parity gates prove
+/// the copies agree.
+fn quantize_scale_zero(low: f32, high: f32) -> Result<(f32, i32), String> {
+    let mut scale = (high - low) / 255.0f32;
+    if scale == 0.0 {
+        scale = 1.0;
+    }
+    if !scale.is_finite() || scale <= 0.0 {
+        return Err("unrepresentable activation range".into());
+    }
+    let zero = (-low / scale).round_ties_even().clamp(0.0, 255.0) as i32;
+    Ok((scale, zero))
+}
+
+/// One row of `quantize`'s code emission (verbatim copy of the
+/// per-row block in `quantize`, parameterized on slices): returns
+/// the row's centered sum.
+fn quantize_row_codes(xrow: &[f32], k: usize, scale: f32, zero: i32, vrow: &mut [i8]) -> i32 {
+    let mut sum = 0i32;
+    #[cfg(target_arch = "aarch64")]
+    {
+        // NEON form of the scalar math below: vdivq is the IEEE
+        // divide, vrndnq is round-ties-even, the clamps and the
+        // integral conversion are exact, and the centered sum is
+        // integer (order-free). Codes are stored as a - 128.
+        use std::arch::aarch64::*;
+        unsafe {
+            let sv = vdupq_n_f32(scale);
+            let zv = vdupq_n_f32(zero as f32);
+            let lov = vdupq_n_f32(0.0);
+            let hiv = vdupq_n_f32(255.0);
+            let mut acc = vdupq_n_s32(0);
+            let mut j = 0usize;
+            while j + 16 <= k {
+                let mut iv = [vdupq_n_s32(0); 4];
+                for g in 0..4 {
+                    let v = vld1q_f32(xrow.as_ptr().add(j + 4 * g));
+                    let v = vrndnq_f32(vdivq_f32(v, sv));
+                    let v = vminq_f32(vmaxq_f32(vaddq_f32(v, zv), lov), hiv);
+                    iv[g] = vcvtq_s32_f32(v);
+                    acc = vaddq_s32(acc, iv[g]);
+                }
+                let s0 = vqmovn_s32(vsubq_s32(iv[0], vdupq_n_s32(128)));
+                let s1 = vqmovn_s32(vsubq_s32(iv[1], vdupq_n_s32(128)));
+                let s2 = vqmovn_s32(vsubq_s32(iv[2], vdupq_n_s32(128)));
+                let s3 = vqmovn_s32(vsubq_s32(iv[3], vdupq_n_s32(128)));
+                let lo8 = vqmovn_s16(vcombine_s16(s0, s1));
+                let hi8 = vqmovn_s16(vcombine_s16(s2, s3));
+                let packed = vcombine_s8(lo8, hi8);
+                vst1q_s8(vrow.as_mut_ptr().add(j) as *mut i8, packed);
+                j += 16;
+            }
+            let mut lanes = [0i32; 4];
+            vst1q_s32(lanes.as_mut_ptr(), acc);
+            sum = ((lanes[0] + lanes[1]) + (lanes[2] + lanes[3])) - (j as i32) * zero;
+            for jj in j..k {
+                let a = ((xrow[jj] / scale).round_ties_even() + zero as f32).clamp(0.0, 255.0) as i32;
+                vrow[jj] = (a - 128) as i8;
+                sum += a - zero;
+            }
+        }
+        return sum;
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        for j in 0..k {
+            let a = ((xrow[j] / scale).round_ties_even() + zero as f32).clamp(0.0, 255.0) as i32;
+            vrow[j] = (a - 128) as i8;
+            sum += a - zero;
+        }
+        sum
+    }
+}
+
+/// One row of normalize()'s output: ((x - mean) / deviation) *
+/// gain per element, in normalize's op order (the NEON form is
+/// IEEE-exact: vsub/vdiv/vmul are the same operations).
+fn norm_row(src: &[f32], mean: f32, deviation: f32, gain: &[f32], out: &mut [f32]) {
+    #[cfg(target_arch = "aarch64")]
+    {
+        use std::arch::aarch64::*;
+        unsafe {
+            let mv = vdupq_n_f32(mean);
+            let dv = vdupq_n_f32(deviation);
+            let mut i = 0usize;
+            while i + 4 <= src.len() {
+                let v = vld1q_f32(src.as_ptr().add(i));
+                let g = vld1q_f32(gain.as_ptr().add(i));
+                let v = vmulq_f32(vdivq_f32(vsubq_f32(v, mv), dv), g);
+                vst1q_f32(out.as_mut_ptr().add(i), v);
+                i += 4;
+            }
+            for j in i..src.len() {
+                out[j] = ((src[j] - mean) / deviation) * gain[j];
+            }
+        }
+        return;
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        for j in 0..src.len() {
+            out[j] = ((src[j] - mean) / deviation) * gain[j];
+        }
+    }
+}
+
+/// Min/max over the normalize()d values of the input without
+/// materializing them: a mirror of minmax_finite (same 0.0 seed,
+/// same "nonfinite activation" error) evaluated on the normed
+/// values -- exactly what the unfused normalize -> quantize path
+/// scans. Min/max are order-free, so the per-row grouping here
+/// returns identical bounds.
+fn minmax_normalized(
+    x: &[f32],
+    rows: usize,
+    width: usize,
+    gain: &[f32],
+    means: &[f32],
+    devs: &[f32],
+) -> Result<(f32, f32), String> {
+    #[cfg(target_arch = "aarch64")]
+    {
+        use std::arch::aarch64::*;
+        unsafe {
+            let mut low4 = vdupq_n_f32(0.0);
+            let mut high4 = vdupq_n_f32(0.0);
+            let mut bad = vdupq_n_u32(0);
+            let maxv = vdupq_n_f32(f32::MAX);
+            let mut low = 0.0f32;
+            let mut high = 0.0f32;
+            let mut bad_any = false;
+            for r in 0..rows {
+                let src = &x[r * width..(r + 1) * width];
+                let mv = vdupq_n_f32(means[r]);
+                let dv = vdupq_n_f32(devs[r]);
+                let mut i = 0usize;
+                while i + 4 <= width {
+                    let v = vld1q_f32(src.as_ptr().add(i));
+                    let g = vld1q_f32(gain.as_ptr().add(i));
+                    let v = vmulq_f32(vdivq_f32(vsubq_f32(v, mv), dv), g);
+                    low4 = vminq_f32(low4, v);
+                    high4 = vmaxq_f32(high4, v);
+                    bad = vorrq_u32(bad, vmvnq_u32(vcleq_f32(vabsq_f32(v), maxv)));
+                    i += 4;
+                }
+                while i < width {
+                    let v = ((src[i] - means[r]) / devs[r]) * gain[i];
+                    if !v.is_finite() {
+                        bad_any = true;
+                    }
+                    if v < low {
+                        low = v;
+                    }
+                    if v > high {
+                        high = v;
+                    }
+                    i += 1;
+                }
+            }
+            let mut lanes = [0.0f32; 4];
+            vst1q_f32(lanes.as_mut_ptr(), low4);
+            for &v in &lanes {
+                if v < low {
+                    low = v;
+                }
+            }
+            vst1q_f32(lanes.as_mut_ptr(), high4);
+            for &v in &lanes {
+                if v > high {
+                    high = v;
+                }
+            }
+            let mut bad_lanes = [0u32; 4];
+            vst1q_u32(bad_lanes.as_mut_ptr(), bad);
+            if bad_any || bad_lanes.iter().any(|&b| b != 0) {
+                return Err("nonfinite activation".into());
+            }
+            return Ok((low, high));
+        }
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        let mut low = 0.0f32;
+        let mut high = 0.0f32;
+        for r in 0..rows {
+            let src = &x[r * width..(r + 1) * width];
+            for i in 0..width {
+                let v = ((src[i] - means[r]) / devs[r]) * gain[i];
+                if !v.is_finite() {
+                    return Err("nonfinite activation".into());
+                }
+                if v < low {
+                    low = v;
+                }
+                if v > high {
+                    high = v;
+                }
+            }
+        }
+        Ok((low, high))
+    }
+}
+
+/// Fused normalize + quantize (speed round 3): bit-identical to
+/// quantize(&normalize(x, rows, width, gain), rows, width). The
+/// normalized tensor is never materialized: per-row stats use
+/// normalize's ascending scalar reductions; every normed value is
+/// computed with normalize's per-element op order, once for the
+/// min/max pass and once into an L1-resident row scratch for code
+/// emission.
+pub fn quantize_normalized(
+    x: &[f32],
+    rows: usize,
+    width: usize,
+    gain: &[f32],
+) -> Result<Quantized, String> {
+    crate::prof::add(&crate::prof::QUANT_ELEMS, (rows * width) as u64);
+    if rows == 0 || rows > 1024 || width == 0 || width > 16384 {
+        return Err("unsupported activation dimensions".into());
+    }
+    debug_assert_eq!(x.len(), rows * width);
+    debug_assert_eq!(gain.len(), width);
+    let _ptn = crate::prof::Timer::start();
+    let mut means = vec![0.0f32; rows];
+    let mut devs = vec![0.0f32; rows];
+    for r in 0..rows {
+        let src = &x[r * width..(r + 1) * width];
+        let mut sum = 0.0f32;
+        let mut squares = 0.0f32;
+        for &v in src {
+            sum += v;
+            squares += v * v;
+        }
+        let mean = sum / width as f32;
+        let variance = squares / width as f32 - mean * mean;
+        means[r] = mean;
+        devs[r] = (variance + 1.0e-5f32).sqrt();
+    }
+    let (low, high) = minmax_normalized(x, rows, width, gain, &means, &devs)?;
+    _ptn.stop(&crate::prof::NORM_NS);
+    let (scale, zero) = quantize_scale_zero(low, high)?;
+    let _ptq = crate::prof::Timer::start();
+    let mut values = vec![0i8; rows * width];
+    let mut centered_sums = vec![0i32; rows];
+    let mut scratch = vec![0.0f32; width];
+    for r in 0..rows {
+        norm_row(&x[r * width..(r + 1) * width], means[r], devs[r], gain, &mut scratch);
+        centered_sums[r] = quantize_row_codes(
+            &scratch,
+            width,
+            scale,
+            zero,
+            &mut values[r * width..(r + 1) * width],
+        );
+    }
+    _ptq.stop(&crate::prof::QUANT_NS);
     Ok(Quantized { values, centered_sums, scale, zero })
 }
 
@@ -595,6 +867,156 @@ unsafe fn project_row_sdot(a: &[i8], m: &Matrix, arow: &mut [i32]) {
     }
 }
 
+
+/// Signed 4-bit code at flat operand position `pos` of the packed
+/// int4 stream (see Int4Matrix for the layout contract).
+fn int4_code_at(m4: &crate::model::Int4Matrix, pos: usize) -> i32 {
+    let byte = m4.packed[pos / 2];
+    let u = if pos % 2 == 0 { byte & 0x0F } else { byte >> 4 };
+    u as i32 - 8
+}
+
+fn int4_group_sums(q: &Quantized, group: usize, ngroups: usize) -> Vec<i32> {
+    let mut av = vec![0i32; ngroups];
+    for (gi, s) in av.iter_mut().enumerate() {
+        *s = q.values[gi * group..(gi + 1) * group]
+            .iter()
+            .map(|&v| v as i32)
+            .sum();
+    }
+    av
+}
+
+/// Definitional int4 GEMV (host/reference): out = q.scale *
+/// (sum_j a[j] * W4[j][c]) + bias, with a[j] = values[j] + 128 -
+/// zero carrying the epilogue's offset itself (no separate
+/// colsum term -- the group-fold form adds it exactly once).
+fn project_gemv_int4_scalar(m4: &crate::model::Int4Matrix, q: &Quantized, out: &mut [f32]) {
+    let (k, n) = (m4.k, m4.n);
+    for c in 0..n {
+        let mut acc = 0.0f32;
+        for j in 0..k {
+            let a = (q.values[j] as i32 + 128 - q.zero) as f32;
+            acc += a * m4.weight_at(j, c);
+        }
+        out[c] = q.scale * acc + m4.bias[c];
+    }
+}
+
+/// Group-fold int4 GEMV in scalar code (the NEON kernel's exact
+/// algebra; host tests pin the two together): per group, SDOT over
+/// biased codes u = q4 + 8, corrected by 8 * (activation group
+/// sum), folded with the group's per-column scale.
+fn project_gemv_int4_fold(m4: &crate::model::Int4Matrix, q: &Quantized, out: &mut [f32]) {
+    let (k, n, g) = (m4.k, m4.n, m4.group);
+    let ngroups = k / g;
+    let av = int4_group_sums(q, g, ngroups);
+    for c in 0..n {
+        let cg = c / 4;
+        let dc = c % 4;
+        let mut accf = 0.0f32;
+        for gi in 0..ngroups {
+            let mut pacc = 0i32;
+            for j in gi * g..(gi + 1) * g {
+                let pos = (cg * (k / 4) + j / 4) * 16 + dc * 4 + j % 4;
+                pacc += q.values[j] as i32 * (int4_code_at(m4, pos) + 8);
+            }
+            accf += m4.gscales[gi * n + c] * (pacc - 8 * av[gi]) as f32;
+        }
+        out[c] = q.scale * (accf + (128 - q.zero) as f32 * m4.colsums[c]) + m4.bias[c];
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+fn project_gemv_int4(m4: &crate::model::Int4Matrix, q: &Quantized, out: &mut [f32]) {
+    if (m4.n / 4) % 4 == 0 {
+        let av = int4_group_sums(q, m4.group, m4.k / m4.group);
+        unsafe { project_gemv_int4_neon(m4, q, &av, out) }
+    } else {
+        project_gemv_int4_fold(m4, q, out)
+    }
+}
+
+#[cfg(not(target_arch = "aarch64"))]
+fn project_gemv_int4(m4: &crate::model::Int4Matrix, q: &Quantized, out: &mut [f32]) {
+    project_gemv_int4_fold(m4, q, out)
+}
+
+/// aarch64 int4 GEMV: mirrors project_gemv_sdot's tiling (16
+/// column groups per tile, depth streamed per column group), with
+/// the weight operand unpacked from nibbles per 16-value block
+/// and a per-group f32 fold.
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "neon,dotprod")]
+unsafe fn project_gemv_int4_neon(
+    m4: &crate::model::Int4Matrix,
+    q: &Quantized,
+    av: &[i32],
+    out: &mut [f32],
+) {
+    use std::arch::aarch64::*;
+    let (k, n, g) = (m4.k, m4.n, m4.group);
+    let ngroups = k / g;
+    let blocks_per_group = g / 4;
+    let depth_blocks = k / 4;
+    let mask = vdupq_n_u8(0x0F);
+    let sa = vdupq_n_f32(q.scale);
+    let zterm = vdupq_n_f32((128 - q.zero) as f32);
+    // Four column groups in flight: four independent SDOT chains
+    // (the single-chain form is latency-bound), sharing each
+    // depth block's activation word. Requires (n/4) % 4 == 0,
+    // enforced at twin-build time.
+    let mut cg0 = 0usize;
+    while cg0 < n / 4 {
+        let mut accf = [vdupq_n_f32(0.0); 4];
+        for gi in 0..ngroups {
+            let mut acc = [vdupq_n_s32(0); 4];
+            // Two depth blocks per step: one 16-byte load holds
+            // both blocks' nibbles; zip1/zip2 split them.
+            for jb2 in (gi * blocks_per_group..(gi + 1) * blocks_per_group).step_by(2) {
+                let a0 = std::ptr::read_unaligned(
+                    q.values.as_ptr().add(jb2 * 4) as *const u32
+                );
+                let a1 = std::ptr::read_unaligned(
+                    q.values.as_ptr().add((jb2 + 1) * 4) as *const u32
+                );
+                let av0 = vreinterpretq_s8_s32(vdupq_n_s32(a0 as i32));
+                let av1 = vreinterpretq_s8_s32(vdupq_n_s32(a1 as i32));
+                for (q4i, acc_i) in acc.iter_mut().enumerate() {
+                    let cg = cg0 + q4i;
+                    let wp = m4.packed.as_ptr().add((cg * depth_blocks + jb2) * 8);
+                    let wb = vld1q_u8(wp);
+                    let lo = vandq_u8(wb, mask);
+                    let hi = vshrq_n_u8::<4>(wb);
+                    // SDOT over the BIASED codes u = q4 + 8
+                    // (0..=15, exact in i8); the group fold
+                    // subtracts 8 * (activation group sum).
+                    let w0 = vreinterpretq_s8_u8(vzip1q_u8(lo, hi));
+                    let w1 = vreinterpretq_s8_u8(vzip2q_u8(lo, hi));
+                    *acc_i = vdotq_s32(*acc_i, w0, av0);
+                    *acc_i = vdotq_s32(*acc_i, w1, av1);
+                }
+            }
+            let corr = vdupq_n_f32((8 * av[gi]) as f32);
+            for (q4i, accf_i) in accf.iter_mut().enumerate() {
+                let cg = cg0 + q4i;
+                let sg = vld1q_f32(m4.gscales.as_ptr().add(gi * n + cg * 4));
+                let tf = vsubq_f32(vcvtq_f32_s32(acc[q4i]), corr);
+                *accf_i = vfmaq_f32(*accf_i, tf, sg);
+            }
+        }
+        for (q4i, accf_i) in accf.iter().enumerate() {
+            let cg = cg0 + q4i;
+            let sw = vld1q_f32(m4.colsums.as_ptr().add(cg * 4));
+            let bv = vld1q_f32(m4.bias.as_ptr().add(cg * 4));
+            let tot = vfmaq_f32(*accf_i, zterm, sw);
+            let res = vfmaq_f32(bv, tot, sa);
+            vst1q_f32(out.as_mut_ptr().add(cg * 4), res);
+        }
+        cg0 += 4;
+    }
+}
+
 /// Accumulate `rows` projection rows (starting at row `r0` of `q`)
 /// into `acc` ([rows][n]). The aarch64 path uses the SDOT kernels
 /// when the packed layout is available.
@@ -780,6 +1202,17 @@ pub fn project_s(m: &Matrix, q: &Quantized, rows: usize, site: u8) -> Vec<f32> {
         1 => crate::prof::add(&crate::prof::PROJ_MACS_DEC, _macs),
         2 => crate::prof::add(&crate::prof::PROJ_MACS_X, _macs),
         _ => crate::prof::add(&crate::prof::PROJ_MACS_ENC, _macs),
+    }
+    // Round 4: int4 GEMV twin (rows == 1, decoder matrices only).
+    if rows == 1 && crate::model::dec_int4_enabled() {
+        if let Some(m4) = &m.int4 {
+            let mut out = crate::scratch::alloc_uninit_f32(n);
+            let _pt4 = crate::prof::Timer::start();
+            project_gemv_int4(m4, q, &mut out);
+            _pt4.stop(&crate::prof::PROJ_ACC_NS);
+            proj_bucket(_bucket_t0, rows, _macs, site);
+            return out;
+        }
     }
     #[cfg(target_arch = "aarch64")]
     {
@@ -995,6 +1428,18 @@ pub fn run(m: &Matrix, x: &[f32], rows: usize, k: usize) -> Result<Vec<f32>, Str
 pub fn run_s(m: &Matrix, x: &[f32], rows: usize, k: usize, site: u8) -> Result<Vec<f32>, String> {
     let q = quantize(x, rows, k)?;
     Ok(project_s(m, &q, rows, site))
+}
+
+/// `run` on a normalize()d input, fused (see quantize_normalized).
+pub fn run_normalized(
+    m: &Matrix,
+    x: &[f32],
+    rows: usize,
+    width: usize,
+    gain: &[f32],
+) -> Result<Vec<f32>, String> {
+    let q = quantize_normalized(x, rows, width, gain)?;
+    Ok(project_s(m, &q, rows, 0))
 }
 
 /// medium.cpp `normalize` (x86 path): per-row ascending sum and sum of
@@ -1316,8 +1761,7 @@ pub fn encoder(model: &Model, input: &[f32], rows: usize) -> Result<Vec<f32>, St
     crate::prof::add(&crate::prof::ENC_ROWS, rows as u64);
     let mut hidden = input.to_vec();
     for layer in 0..14 {
-        let normalized = normalize(&hidden, rows, 768, &model.encoder_norms[layer * 2]);
-        let q = quantize(&normalized, rows, 768)?;
+        let q = quantize_normalized(&hidden, rows, 768, &model.encoder_norms[layer * 2])?;
         let qs = project(&model.encoder_matrices[layer * 6], &q, rows);
         let ks = project(&model.encoder_matrices[layer * 6 + 1], &q, rows);
         let vs = project(&model.encoder_matrices[layer * 6 + 2], &q, rows);
@@ -1335,8 +1779,13 @@ pub fn encoder(model: &Model, input: &[f32], rows: usize) -> Result<Vec<f32>, St
             *h += p;
         }
         _tere.stop(&crate::prof::ENC_RESID_NS);
-        let normalized = normalize(&hidden, rows, 768, &model.encoder_norms[layer * 2 + 1]);
-        let mut expanded = run(&model.encoder_matrices[layer * 6 + 4], &normalized, rows, 768)?;
+        let mut expanded = run_normalized(
+            &model.encoder_matrices[layer * 6 + 4],
+            &hidden,
+            rows,
+            768,
+            &model.encoder_norms[layer * 2 + 1],
+        )?;
         let _tege = crate::prof::Timer::start();
         kernels::gelu_erf_inplace(&mut expanded);
         _tege.stop(&crate::prof::ENC_GELU_NS);
@@ -1381,3 +1830,139 @@ pub fn cross(model: &Model, input: &[f32], rows: usize) -> Result<(Vec<f32>, Vec
     Ok((keys, values))
 }
 
+
+#[cfg(test)]
+mod int4_tests {
+    use super::*;
+    use crate::model::{Int4Matrix, Matrix, WeightStore};
+
+    fn test_matrix(k: usize, n: usize, seed: u32) -> Matrix {
+        let mut state = seed;
+        let mut rnd = move || {
+            state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+            (state >> 8) as i32
+        };
+        let weights: Vec<i8> = (0..k * n).map(|_| (rnd() % 255 - 127) as i8).collect();
+        let sums: Vec<i32> = (0..n)
+            .map(|c| (0..k).map(|j| weights[j * n + c] as i32).sum())
+            .collect();
+        let scales: Vec<f32> = (0..n).map(|c| 0.001 + 0.0001 * (c % 7) as f32).collect();
+        let zeros: Vec<i32> = (0..n).map(|c| (c % 5) as i32 - 2).collect();
+        let bias: Vec<f32> = (0..n).map(|c| 0.01 * (c as f32 - 2.0)).collect();
+        Matrix {
+            k,
+            n,
+            weights: WeightStore::Owned(weights),
+            packed_sdot: WeightStore::Owned(Vec::new()),
+            packed_mmla: WeightStore::Owned(Vec::new()),
+            packed_gemv: WeightStore::Owned(Vec::new()),
+            sums,
+            scales,
+            zeros,
+            bias,
+            int4: None,
+        }
+    }
+
+    #[test]
+    fn int4_fold_matches_definition() {
+        let m = test_matrix(128, 8, 42);
+        let m4 = Int4Matrix::from_matrix(&m);
+        let x: Vec<f32> = (0..128).map(|i| ((i * 37 % 101) as f32 - 50.0) * 0.05).collect();
+        let q = quantize(&x, 1, 128).unwrap();
+        let mut a = vec![0.0f32; 8];
+        let mut b = vec![0.0f32; 8];
+        project_gemv_int4_scalar(&m4, &q, &mut a);
+        project_gemv_int4_fold(&m4, &q, &mut b);
+        for c in 0..8 {
+            assert!(
+                (a[c] - b[c]).abs() <= 3e-3 * (1.0 + a[c].abs()),
+                "c={c} def={} fold={}",
+                a[c],
+                b[c]
+            );
+        }
+    }
+
+    #[test]
+    fn int4_dispatch_matches_fold() {
+        // On aarch64 the dispatch runs the NEON kernel; elsewhere
+        // it IS the fold. Compares against the scalar fold algebra.
+        for &(k, n) in &[(64usize, 4usize), (128, 4), (128, 8), (640, 4), (64, 640), (2560, 640), (640, 5120), (640, 640)] {
+            let m = test_matrix(k, n, 7);
+            let m4 = Int4Matrix::from_matrix(&m);
+            let x: Vec<f32> = (0..k).map(|i| ((i * 53 % 211) as f32 - 105.0) * 0.03).collect();
+            let q = quantize(&x, 1, k).unwrap();
+            let mut a = vec![0.0f32; n];
+            let mut b = vec![0.0f32; n];
+            project_gemv_int4(&m4, &q, &mut a);
+            project_gemv_int4_fold(&m4, &q, &mut b);
+            let mut maxd = 0.0f32;
+            for c in 0..n {
+                maxd = maxd.max((a[c] - b[c]).abs());
+            }
+            println!("shape {k}x{n}: max diff {maxd}");
+            assert!(maxd <= 3e-3 * 20.0, "shape {k}x{n} max diff {maxd}");
+        }
+    }
+
+
+
+    #[test]
+    fn int4_gemv_bench() {
+        // Kernel economics on cold streams: rotate over copies so
+        // each call streams weights from DRAM, like a decode token.
+        for &(k, n) in &[(640usize, 640usize), (640, 5120), (2560, 640)] {
+            // Enough copies that the rotation streams from DRAM
+            // (>= ~48 MB of weights), like a real decode token.
+            let copies = (48_000_000 / (k * n)).max(6).min(160);
+            let mut ms = Vec::new();
+            let mut m4s = Vec::new();
+            for i in 0..copies {
+                let mut m = test_matrix(k, n, 100 + i as u32);
+                m.packed_gemv = WeightStore::Owned(crate::layout::pack_gemv(m.weights(), k, n));
+                m.packed_sdot = WeightStore::Owned(crate::layout::pack_sdot(m.weights(), k, n));
+                m4s.push(Int4Matrix::from_matrix(&m));
+                ms.push(m);
+            }
+            let x: Vec<f32> = (0..k).map(|i| ((i * 53 % 211) as f32 - 105.0) * 0.03).collect();
+            let q = quantize(&x, 1, k).unwrap();
+            let iters = 120;
+            // int8 production path (project_s rows == 1).
+            let t0 = std::time::Instant::now();
+            let mut sink = 0.0f32;
+            for it in 0..iters {
+                let out = project_s(&ms[it % copies], &q, 1, 1);
+                sink += out[it % n];
+            }
+            let t8 = t0.elapsed().as_secs_f64() / iters as f64;
+            // int4 kernel.
+            let mut out4 = vec![0.0f32; n];
+            let t0 = std::time::Instant::now();
+            for it in 0..iters {
+                project_gemv_int4(&m4s[it % copies], &q, &mut out4);
+                sink += out4[it % n];
+            }
+            let t4 = t0.elapsed().as_secs_f64() / iters as f64;
+            let macs = (k * n) as f64;
+            println!(
+                "shape {k}x{n}: int8 {:.1} us ({:.2} GMAC/s) | int4 {:.1} us ({:.2} GMAC/s) | ratio {:.3} (sink {sink:.2})",
+                t8 * 1e6, macs / t8 / 1e9, t4 * 1e6, macs / t4 / 1e9, t4 / t8
+            );
+        }
+    }
+
+    #[test]
+    fn int4_close_to_int8() {
+        let m = test_matrix(640, 64, 7);
+        let m4 = Int4Matrix::from_matrix(&m);
+        let x: Vec<f32> = (0..640).map(|i| ((i * 53 % 211) as f32 - 105.0) * 0.03).collect();
+        let q = quantize(&x, 1, 640).unwrap();
+        let r8 = project_s(&m, &q, 1, 1);
+        let mut r4 = vec![0.0f32; 64];
+        project_gemv_int4_fold(&m4, &q, &mut r4);
+        let rms = (r8.iter().map(|v| v * v).sum::<f32>() / 64.0).sqrt();
+        let err = (0..64).map(|c| (r8[c] - r4[c]).abs()).fold(0.0f32, f32::max);
+        assert!(err < 0.25 * rms, "max err {err} vs rms {rms}");
+    }
+}

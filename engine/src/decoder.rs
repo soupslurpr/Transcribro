@@ -302,6 +302,16 @@ unsafe fn head_codes(
     }
 }
 
+/// Lever 8 engagement: TS_HEAD_INT8 set (and not "0") plus a
+/// load-built head Matrix. ADOPTED 2026-11-10 under the user's
+/// conditional grant (corpus ΔWER gate passed round 3; activation
+/// evidence pack in GATE6-SPEED3.md) -- default ON; the env var
+/// remains a kill switch.
+fn head_int8_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("TS_HEAD_INT8").map(|v| v != "0").unwrap_or(true))
+}
+
 fn head_block(model: &Model, normalized: &[f32], rows: usize, column: usize, block: &mut [f32]) {
     match &model.head {
         crate::model::HeadStore::Tiled(head) => {
@@ -365,6 +375,163 @@ enum Dest<'a> {
     Cache(&'a mut Cache),
 }
 
+
+// ---- TS_HEAD_PROBE (Round 4, Track A): activation-level int8-head
+// evidence. When TS_HEAD_PROBE=<jsonl path> is set, every head
+// evaluation in run_decoder additionally computes BOTH production
+// logit rows from the same normalized inputs (float via head_block
+// at the call's real shape; int8 via quantize + project_s over the
+// head Matrix, production block loop) and appends one JSON record
+// per row. Purely observational: no production value flows back.
+
+static PROBE_FILE: std::sync::OnceLock<
+    Option<std::sync::Mutex<std::io::BufWriter<std::fs::File>>>,
+> = std::sync::OnceLock::new();
+static PROBE_CALL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn probe_file() -> Option<&'static std::sync::Mutex<std::io::BufWriter<std::fs::File>>> {
+    PROBE_FILE
+        .get_or_init(|| {
+            let path = std::env::var("TS_HEAD_PROBE").ok()?;
+            let f = std::fs::File::create(path).ok()?;
+            Some(std::sync::Mutex::new(std::io::BufWriter::new(f)))
+        })
+        .as_ref()
+}
+
+fn probe_fnv1a(x: &[f32]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for v in x {
+        for b in v.to_bits().to_le_bytes() {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+    h
+}
+
+/// (max, mean, p99) of |a - b| elementwise; p99 from a 512-bin
+/// histogram over [0, max] (upper edge of the crossing bin).
+fn probe_delta_stats(a: &[f32], b: &[f32]) -> (f32, f32, f32) {
+    let mut max = 0.0f32;
+    let mut sum = 0.0f64;
+    for i in 0..a.len() {
+        let d = (a[i] - b[i]).abs();
+        if d > max {
+            max = d;
+        }
+        sum += d as f64;
+    }
+    let mean = (sum / a.len() as f64) as f32;
+    if max == 0.0 {
+        return (0.0, 0.0, 0.0);
+    }
+    let mut bins = [0u32; 512];
+    for i in 0..a.len() {
+        let d = (a[i] - b[i]).abs();
+        let mut bin = (d / max * 512.0) as usize;
+        if bin > 511 {
+            bin = 511;
+        }
+        bins[bin] += 1;
+    }
+    let target = (a.len() as f64 * 0.99).ceil() as u32;
+    let mut cum = 0u32;
+    let mut p99 = max;
+    for (i, &c) in bins.iter().enumerate() {
+        cum += c;
+        if cum >= target {
+            p99 = (i + 1) as f32 / 512.0 * max;
+            break;
+        }
+    }
+    (max, mean, p99)
+}
+
+fn head_probe_eval(model: &Model, normalized: &[f32], rows: usize, past: usize, tokens: &[i64]) {
+    use std::io::Write;
+    let Some(mu) = probe_file() else { return };
+    let Some(hm) = &model.head_matrix else { return };
+    let call = PROBE_CALL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let clip = std::env::var("TS_HEAD_PROBE_CLIP").unwrap_or_default();
+    let drive = if head_int8_enabled() { "i8" } else { "f32" };
+    // Float logits for the whole call, production shape.
+    let mut logits_f = vec![0.0f32; rows * 32768];
+    {
+        let mut block = vec![0.0f32; rows * 128];
+        for column in (0..32768).step_by(128) {
+            head_block(model, normalized, rows, column, &mut block);
+            for r in 0..rows {
+                logits_f[r * 32768 + column..r * 32768 + column + 128]
+                    .copy_from_slice(&block[r * 128..(r + 1) * 128]);
+            }
+        }
+    }
+    // Int8 logits for the whole call, production block loop.
+    let mut logits_i = vec![0.0f32; rows * 32768];
+    let mut done = 0usize;
+    while done < rows {
+        let take = (rows - done).min(256);
+        let q = match quantize(&normalized[done * 640..(done + take) * 640], take, 640) {
+            Ok(q) => q,
+            Err(_) => return,
+        };
+        let out = project_s(hm, &q, take, 1);
+        logits_i[done * 32768..(done + take) * 32768].copy_from_slice(&out);
+        done += take;
+    }
+    let toks: Vec<String> = tokens.iter().map(|t| t.to_string()).collect();
+    let toks = toks.join(",");
+    let mut text = String::new();
+    for r in 0..rows {
+        let x = &normalized[r * 640..(r + 1) * 640];
+        let lf = &logits_f[r * 32768..(r + 1) * 32768];
+        let li = &logits_i[r * 32768..(r + 1) * 32768];
+        // Float top-1 / top-2, first-maximum scan order.
+        let (mut t1, mut v1, mut v2) = (0usize, f32::NEG_INFINITY, f32::NEG_INFINITY);
+        for (i, &v) in lf.iter().enumerate() {
+            if v > v1 {
+                v2 = v1;
+                v1 = v;
+                t1 = i;
+            } else if v > v2 {
+                v2 = v;
+            }
+        }
+        let t2 = (0..32768).find(|&i| i != t1 && lf[i] == v2).unwrap_or(usize::MAX);
+        // Int8 argmax, first-maximum scan order.
+        let (mut ia, mut iv) = (0usize, f32::NEG_INFINITY);
+        for (i, &v) in li.iter().enumerate() {
+            if v > iv {
+                iv = v;
+                ia = i;
+            }
+        }
+        let (d_max, d_mean, d_p99) = probe_delta_stats(lf, li);
+        let row_scale = lf.iter().fold(0.0f32, |a, &v| a.max(v.abs()));
+        // Input-side delta of the int8 path on this row.
+        let (inq_max, inq_mean, inq_p99) = match quantize(x, 1, 640) {
+            Ok(q1) => {
+                let dq = q1.dequantized_row(0, 640);
+                probe_delta_stats(x, &dq)
+            }
+            Err(_) => (0.0, 0.0, 0.0),
+        };
+        text.push_str(&format!(
+            "{{\"clip\":\"{clip}\",\"drive\":\"{drive}\",\"call\":{call},\"row\":{r},\"rows\":{rows},\"past\":{past},\"tokens\":[{toks}],\"in_sha\":{},\"inq_max\":{inq_max:.6e},\"inq_mean\":{inq_mean:.6e},\"inq_p99\":{inq_p99:.6e},\"f_top1\":{t1},\"f_top2\":{t2},\"f_margin\":{:.6e},\"f_top1_val\":{v1:.6e},\"i_argmax\":{ia},\"d_at_f1\":{:.6e},\"d_at_chal\":{:.6e},\"d_max\":{d_max:.6e},\"d_mean\":{d_mean:.6e},\"d_p99\":{d_p99:.6e},\"row_scale\":{row_scale:.6e},\"flip\":{}}}\n",
+            probe_fnv1a(x),
+            v1 - v2,
+            li[t1] - lf[t1],
+            li[ia] - lf[ia],
+            if ia != t1 { 1 } else { 0 },
+        ));
+    }
+    if let Ok(mut w) = mu.lock() {
+        let _ = w.write_all(text.as_bytes());
+        let _ = w.flush();
+    }
+}
+
 /// The decoder body shared by both ABI entries; validation matching
 /// medium.cpp's requires happens in the entry functions below.
 #[allow(clippy::too_many_arguments)]
@@ -376,7 +543,7 @@ fn run_decoder(
     cross_k: &[f32],
     cross_v: &[f32],
     frames: usize,
-    head: Head,
+    mut head: Head,
     mut dest: Dest,
 ) -> Result<(), String> {
     let rows = tokens.len();
@@ -553,8 +720,50 @@ fn run_decoder(
         _tres.stop(&crate::prof::DEC_RESID_NS);
     }
     let normalized = normalize(&hidden, rows, 640, &model.decoder_norms[42]);
+    if probe_file().is_some() {
+        head_probe_eval(model, &normalized, rows, past, tokens);
+    }
     let _pth = crate::prof::Timer::start();
     crate::prof::add(&crate::prof::HEAD_MACS, (rows as u64) * 32768 * 640);
+    let mut head_done = false;
+    if head_int8_enabled() {
+        if let Some(hm) = &model.head_matrix {
+            // Int8 head (lever 8): quantize the normalized rows
+            // (the same activation quantization every encoder
+            // projection applies) and project over the head's
+            // own codes; the epilogue's i32 corrections make
+            // the weight side exact. Predictions keep the
+            // first-maximum scan order over the full logit row.
+            let mut done = 0usize;
+            while done < rows {
+                let take = (rows - done).min(256);
+                let q = quantize(&normalized[done * 640..(done + take) * 640], take, 640)?;
+                let out = project_s(hm, &q, take, 1);
+                match &mut head {
+                    Head::Logits(logits) => {
+                        (*logits)[done * 32768..(done + take) * 32768].copy_from_slice(&out);
+                    }
+                    Head::Predictions(preds) => {
+                        for r in 0..take {
+                            let row = &out[r * 32768..(r + 1) * 32768];
+                            let mut best = row[0];
+                            let mut sel = 0i64;
+                            for (i, &v) in row.iter().enumerate().skip(1) {
+                                if best < v {
+                                    best = v;
+                                    sel = i as i64;
+                                }
+                            }
+                            (*preds)[done + r] = sel;
+                        }
+                    }
+                }
+                done += take;
+            }
+            head_done = true;
+        }
+    }
+    if !head_done {
     let mut block = crate::scratch::take_f32(rows * 128);
     block.clear();
     block.resize(rows * 128, 0.0);
@@ -595,6 +804,7 @@ fn run_decoder(
                 }
             }
         }
+    }
     }
     _pth.stop(&crate::prof::HEAD_NS);
     if let Dest::Cache(cache) = dest {
