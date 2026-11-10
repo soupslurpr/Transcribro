@@ -305,6 +305,7 @@ unsafe fn head_codes(
 fn head_block(model: &Model, normalized: &[f32], rows: usize, column: usize, block: &mut [f32]) {
     match &model.head {
         crate::model::HeadStore::Tiled(head) => {
+            let head = head.as_slice();
             let b = &head[column * 640..column * 640 + 640 * 128];
             if rows == 1 {
                 for j in 0..128 {
@@ -315,6 +316,8 @@ fn head_block(model: &Model, normalized: &[f32], rows: usize, column: usize, blo
             }
         }
         crate::model::HeadStore::Codes { codes, scale, zero, tiled } => {
+            let codes = codes.as_slice();
+            let tiled = tiled.as_slice();
             // CompactHead form (aarch64): logit(v) = sum_j x_j *
             // (code(v, j) - zero) * scale. The tiled kernel keeps
             // head_dot's exact per-logit accumulation (four j-lane

@@ -20,6 +20,12 @@ pub struct ParsedArchive<'a> {
     /// [k][n] order (Gate 6 format v2); TRMED001 stores them in the
     /// layout-8 packing the loader must undo.
     pub natural_weights: bool,
+    /// TRMED003 additionally carries derived kernel-ready layout
+    /// tensors (Gate 6 speed round 2): the three packed projection
+    /// layouts per matrix, the natural-order embedding codes, and
+    /// the head's FP32 tiles — pure rearrangements of the census
+    /// values, borrowed zero-copy by the loader when present.
+    pub derived_layouts: bool,
 }
 
 fn le_u32(d: &[u8], o: usize) -> u32 {
@@ -34,13 +40,16 @@ pub fn parse(data: &[u8]) -> Result<ParsedArchive<'_>, String> {
     if length < 64 || length > 1024 * 1024 * 1024 {
         return Err("archive memory extent or alignment".into());
     }
-    let natural_weights = if &data[0..8] == b"TRMED001" && le_u32(data, 8) == 1 {
-        false
-    } else if &data[0..8] == b"TRMED002" && le_u32(data, 8) == 2 {
-        true
-    } else {
-        return Err("unsupported archive".into());
-    };
+    let (natural_weights, derived_layouts) =
+        if &data[0..8] == b"TRMED001" && le_u32(data, 8) == 1 {
+            (false, false)
+        } else if &data[0..8] == b"TRMED002" && le_u32(data, 8) == 2 {
+            (true, false)
+        } else if &data[0..8] == b"TRMED003" && le_u32(data, 8) == 3 {
+            (true, true)
+        } else {
+            return Err("unsupported archive".into());
+        };
     if le_u64(data, 16) != length as u64 || le_u64(data, 24) != 64 {
         return Err("archive header mismatch".into());
     }
@@ -100,10 +109,10 @@ pub fn parse(data: &[u8]) -> Result<ParsedArchive<'_>, String> {
     if previous_end != length {
         return Err("unexpected trailing model bytes".into());
     }
-    if tensors.len() != 1230 {
+    if tensors.len() != 1230 && !(derived_layouts && tensors.len() > 1230) {
         return Err("unexpected Medium tensor count".into());
     }
-    Ok(ParsedArchive { data, tensors, natural_weights })
+    Ok(ParsedArchive { data, tensors, natural_weights, derived_layouts })
 }
 
 impl<'a> ParsedArchive<'a> {

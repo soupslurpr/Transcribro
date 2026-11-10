@@ -1022,6 +1022,18 @@ pub fn normalize(x: &[f32], rows: usize, width: usize, gain: &[f32]) -> Vec<f32>
     out
 }
 
+/// Write `x` ([rows][640]) into `out` in head-major [10][rows][64]
+/// order — the exact permutation of `heads` without the temp buffer.
+pub fn scatter_heads(x: &[f32], rows: usize, out: &mut [f32]) {
+    for h in 0..10 {
+        for r in 0..rows {
+            let src = &x[r * 640 + h * 64..r * 640 + h * 64 + 64];
+            let dst = &mut out[(h * rows + r) * 64..(h * rows + r) * 64 + 64];
+            dst.copy_from_slice(src);
+        }
+    }
+}
+
 /// [rows][640] -> head-major [10][rows][64] (pure copies).
 pub fn heads(x: &[f32], rows: usize) -> Vec<f32> {
     let mut out = vec![0.0f32; x.len()];
@@ -1361,8 +1373,10 @@ pub fn cross(model: &Model, input: &[f32], rows: usize) -> Result<(Vec<f32>, Vec
     for layer in 0..14 {
         let k = project_s(&model.cross_matrices[layer * 2], &q, rows, 2);
         let v = project_s(&model.cross_matrices[layer * 2 + 1], &q, rows, 2);
-        keys[layer * rows * 640..(layer + 1) * rows * 640].copy_from_slice(&heads(&k, rows));
-        values[layer * rows * 640..(layer + 1) * rows * 640].copy_from_slice(&heads(&v, rows));
+        // Head-major scatter written directly into the cache
+        // (values identical to heads()+copy; one pass, no temp).
+        scatter_heads(&k, rows, &mut keys[layer * rows * 640..(layer + 1) * rows * 640]);
+        scatter_heads(&v, rows, &mut values[layer * rows * 640..(layer + 1) * rows * 640]);
     }
     Ok((keys, values))
 }

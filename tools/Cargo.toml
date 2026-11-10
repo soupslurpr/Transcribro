@@ -11,6 +11,10 @@ sha2 = "0.10"
 tar = "0.4"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 libc = "0.2"
+# The engine crate, for `engine::layout` only: the kernel-ready
+# weight layouts are single-sourced there so the TRMED003 converter
+# and the engine loader can never drift (Gate 6 speed round 2).
+engine = { path = "../engine", package = "transcribro-engine" }
 
 [profile.release]
 debug = false

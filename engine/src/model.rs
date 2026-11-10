@@ -82,6 +82,12 @@ impl WeightStore {
             },
         }
     }
+    pub fn len(&self) -> usize {
+        self.as_slice().len()
+    }
+    pub fn as_ptr(&self) -> *const i8 {
+        self.as_slice().as_ptr()
+    }
 }
 
 /// One quantized projection (medium.cpp `Matrix` / projection.h): archive
@@ -93,18 +99,18 @@ pub struct Matrix {
     pub k: usize,
     pub n: usize,
     pub weights: WeightStore, // [k][n]
-    /// aarch64 SDOT tile layout of `weights` (see `pack_sdot`); built
-    /// at load on aarch64 only, empty elsewhere.
-    pub packed_sdot: Vec<i8>,
-    /// aarch64 SMMLA tile layout of `weights` (see `pack_mmla`);
-    /// built at load on aarch64 when the i8mm path can use it,
-    /// empty elsewhere.
-    pub packed_mmla: Vec<i8>,
-    /// aarch64 GEMV layout of `weights` (see `pack_gemv`):
+    /// aarch64 SDOT tile layout of `weights` (see
+    /// `crate::layout::pack_sdot`); built at load on aarch64 only,
+    /// or borrowed zero-copy from a TRMED003 archive; empty elsewhere.
+    pub packed_sdot: WeightStore,
+    /// aarch64 SMMLA tile layout of `weights` (see
+    /// `crate::layout::pack_mmla`); same provenance as `packed_sdot`.
+    pub packed_mmla: WeightStore,
+    /// aarch64 GEMV layout of `weights` (see `crate::layout::pack_gemv`):
     /// column-group-major, so a single row's projection streams
-    /// each output column group's codes contiguously; built at
-    /// load on aarch64 only, empty elsewhere.
-    pub packed_gemv: Vec<i8>,
+    /// each output column group's codes contiguously; same
+    /// provenance as `packed_sdot`.
+    pub packed_gemv: WeightStore,
     pub sums: Vec<i32>,       // [n]
     pub scales: Vec<f32>,     // [n]
     pub zeros: Vec<i32>,      // [n], zero point - 128
@@ -117,64 +123,52 @@ impl Matrix {
     }
 }
 
-/// Tile layout for the aarch64 SDOT projection kernel: element (j, c)
-/// of the natural [k][n] matrix lives at
-/// `((j / 4) * (n / 4) + (c / 4)) * 16 + (c % 4) * 4 + (j % 4)`, so the
-/// 16 bytes at a tile start are exactly the B operand `vdotq_s32`
-/// consumes: B[4l + t] = w[j0 + t][c0 + l] against an A operand whose
-/// every 4-byte group is [a[j0], a[j0+1], a[j0+2], a[j0+3]].
-/// GEMV layout: the same 16-byte chunks as `pack_sdot`
-/// (columns 4cg..4cg+4 at depths 4jb..4jb+4, lane = column,
-/// byte = depth) but stored column-group-major: chunk
-/// (cg, jb) sits at ((cg * (k/4)) + jb) * 16, so one output
-/// column group's whole depth is contiguous.
-pub fn pack_gemv(weights: &[i8], k: usize, n: usize) -> Vec<i8> {
-    let mut out = vec![0i8; k * n];
-    for j in 0..k {
-        for c in 0..n {
-            out[(((c / 4) * (k / 4) + (j / 4)) * 16) + (c % 4) * 4 + (j % 4)] =
-                weights[j * n + c];
-        }
-    }
-    out
+/// Owned-or-borrowed byte storage (the head's natural-order embedding
+/// codes); same lifetime contract as `WeightStore`.
+pub enum ByteStore {
+    Owned(Vec<u8>),
+    Borrowed { ptr: *const u8, len: usize },
 }
 
-pub fn pack_sdot(weights: &[i8], k: usize, n: usize) -> Vec<i8> {
-    let mut out = vec![0i8; k * n];
-    for j in 0..k {
-        for c in 0..n {
-            out[((j / 4) * (n / 4) + (c / 4)) * 16 + (c % 4) * 4 + (j % 4)] = weights[j * n + c];
+unsafe impl Send for ByteStore {}
+unsafe impl Sync for ByteStore {}
+
+impl ByteStore {
+    pub fn as_slice(&self) -> &[u8] {
+        match self {
+            ByteStore::Owned(v) => v,
+            ByteStore::Borrowed { ptr, len } => unsafe {
+                std::slice::from_raw_parts(*ptr, *len)
+            },
         }
     }
-    out
 }
 
-/// Tile layout for the aarch64 SMMLA (i8mm) projection kernel:
-/// a pure rearrangement of the natural [k][n] weights (values are
-/// already the signed code-128 codes the accumulation consumes).
-/// For an 8-column block `cb` and an 8-deep k block `jb`, the four
-/// 16-byte chunks at `((cb * (k/8) + jb) * 4 + p) * 16` hold, for
-/// column pair `p`, first column `cb*8 + 2p`'s codes for
-/// k = jb*8..jb*8+8, then column `cb*8 + 2p + 1`'s — exactly the
-/// B operand `smmla` consumes against an A operand of two rows'
-/// matching 8-byte k runs.
-pub fn pack_mmla(weights: &[i8], k: usize, n: usize) -> Vec<i8> {
-    let mut out = vec![0i8; k * n];
-    for cb in 0..n / 8 {
-        for jb in 0..k / 8 {
-            for p in 0..4 {
-                let dst = ((cb * (k / 8) + jb) * 4 + p) * 16;
-                for half in 0..2 {
-                    let c = cb * 8 + p * 2 + half;
-                    for kk in 0..8 {
-                        out[dst + half * 8 + kk] = weights[(jb * 8 + kk) * n + c];
-                    }
-                }
-            }
+/// Owned-or-borrowed f32 storage (the head's dequantized FP32 tiles);
+/// same lifetime contract as `WeightStore`.
+pub enum F32Store {
+    Owned(Vec<f32>),
+    Borrowed { ptr: *const f32, len: usize },
+}
+
+unsafe impl Send for F32Store {}
+unsafe impl Sync for F32Store {}
+
+impl F32Store {
+    pub fn as_slice(&self) -> &[f32] {
+        match self {
+            F32Store::Owned(v) => v,
+            F32Store::Borrowed { ptr, len } => unsafe {
+                std::slice::from_raw_parts(*ptr, *len)
+            },
         }
     }
-    out
 }
+
+/// The kernel-ready layouts now live in `crate::layout` (single-
+/// sourced with the TRMED003 converter); re-exported here so the
+/// Gate 1-6 call sites keep their paths.
+pub use crate::layout::{pack_gemv, pack_mmla, pack_sdot};
 
 fn load_matrix(
     parsed: &ParsedArchive,
@@ -224,46 +218,79 @@ fn load_matrix(
         }
         WeightStore::Owned(weights)
     };
-    let packed_sdot = {
-        #[cfg(target_arch = "aarch64")]
-        {
-            if k % 4 == 0 && n % 4 == 0 {
-                pack_sdot(weights.as_slice(), k, n)
-            } else {
-                Vec::new()
-            }
+    // Kernel-ready layouts: borrowed zero-copy from a TRMED003
+    // archive when it carries them (they are the exact bytes the
+    // pack_* permutations below produce), else packed at load on
+    // aarch64 (the TRMED001/002 path), else empty. A derived tensor
+    // that is present but mis-shaped is an archive error, not a
+    // fallback trigger.
+    let derived = |suffix: &str| -> Result<Option<WeightStore>, String> {
+        if !parsed.derived_layouts {
+            return Ok(None);
         }
-        #[cfg(not(target_arch = "aarch64"))]
-        {
-            Vec::new()
+        let Some(t) = parsed.tensors.get(&format!("{name}/{suffix}")) else {
+            return Ok(None);
+        };
+        if t.ty != 3 || t.shape != [k, n] || t.bytes != k * n {
+            return Err(format!("bad derived layout tensor {name}/{suffix}"));
+        }
+        let Some(base) = borrow_base else {
+            return Ok(None);
+        };
+        Ok(Some(WeightStore::Borrowed {
+            ptr: unsafe { base.add(t.offset) } as *const i8,
+            len: k * n,
+        }))
+    };
+    let packed_sdot = match derived("weight_sdot")? {
+        Some(s) => s,
+        None => {
+            #[cfg(target_arch = "aarch64")]
+            {
+                if k % 4 == 0 && n % 4 == 0 {
+                    WeightStore::Owned(pack_sdot(weights.as_slice(), k, n))
+                } else {
+                    WeightStore::Owned(Vec::new())
+                }
+            }
+            #[cfg(not(target_arch = "aarch64"))]
+            {
+                WeightStore::Owned(Vec::new())
+            }
         }
     };
-    let packed_mmla = {
-        #[cfg(target_arch = "aarch64")]
-        {
-            if k % 8 == 0 && n % 8 == 0 {
-                pack_mmla(weights.as_slice(), k, n)
-            } else {
-                Vec::new()
+    let packed_mmla = match derived("weight_mmla")? {
+        Some(s) => s,
+        None => {
+            #[cfg(target_arch = "aarch64")]
+            {
+                if k % 8 == 0 && n % 8 == 0 {
+                    WeightStore::Owned(pack_mmla(weights.as_slice(), k, n))
+                } else {
+                    WeightStore::Owned(Vec::new())
+                }
             }
-        }
-        #[cfg(not(target_arch = "aarch64"))]
-        {
-            Vec::new()
+            #[cfg(not(target_arch = "aarch64"))]
+            {
+                WeightStore::Owned(Vec::new())
+            }
         }
     };
-    let packed_gemv = {
-        #[cfg(target_arch = "aarch64")]
-        {
-            if k % 4 == 0 && n % 4 == 0 {
-                pack_gemv(weights.as_slice(), k, n)
-            } else {
-                Vec::new()
+    let packed_gemv = match derived("weight_gemv")? {
+        Some(s) => s,
+        None => {
+            #[cfg(target_arch = "aarch64")]
+            {
+                if k % 4 == 0 && n % 4 == 0 {
+                    WeightStore::Owned(pack_gemv(weights.as_slice(), k, n))
+                } else {
+                    WeightStore::Owned(Vec::new())
+                }
             }
-        }
-        #[cfg(not(target_arch = "aarch64"))]
-        {
-            Vec::new()
+            #[cfg(not(target_arch = "aarch64"))]
+            {
+                WeightStore::Owned(Vec::new())
+            }
         }
     };
     Ok(Matrix {
@@ -311,31 +338,28 @@ pub struct Model {
 /// embedding codes re-laid in natural [32768][640] order (21 MB), with
 /// dequantization at use -- no 84 MB FP32 expansion on device.
 pub enum HeadStore {
-    Tiled(Vec<f32>),
+    Tiled(F32Store),
     Codes {
-        codes: Vec<u8>,
+        codes: ByteStore,
         scale: f32,
         zero: i32,
         /// FP32 dequantized head in the same 128-column tile
         /// layout as `Tiled`, for multi-row (bulk) calls, which
         /// run as an FP32 GEMM like the C++ oracle's bulk head.
-        /// Empty when unavailable.
-        tiled: Vec<f32>,
+        /// Borrowed from a TRMED003 archive when available;
+        /// an empty Owned store when unavailable.
+        tiled: F32Store,
     },
 }
 
-/// medium.cpp `embedding_code`: the raw uint8 affine code of (token,
-/// feature) in the packed64 layout, or the plain [token][feature] layout.
-pub fn embedding_code(codes: &[u8], packed: bool, token: usize, feature: usize) -> u8 {
-    if !packed {
-        return codes[token * 640 + feature];
-    }
-    let offset = (token / 64) * (640 * 64)
-        + (feature / 128) * (128 * 64)
-        + (token % 64 / 16) * (128 * 16)
-        + (feature % 128) * 16
-        + token % 16;
-    codes[offset]
+/// Kept at its historical path; the definition lives in
+/// `crate::layout` (single-sourced with the TRMED003 converter).
+pub use crate::layout::embedding_code;
+
+/// The embedding codes in natural [token][feature] order
+/// (delegates to `crate::layout::natural_embedding_codes`).
+fn natural_codes(codes: &[u8], packed: bool) -> Vec<u8> {
+    crate::layout::natural_embedding_codes(codes, packed)
 }
 
 fn dequant_per_output(
@@ -489,41 +513,102 @@ impl Model {
         }
         let embedding_zero =
             parsed.u8_vec(parsed.expect("decoder/embedding/zero_point", 2, &[1])?)[0] as i32;
-        let (embedding_codes, embedding_packed) =
-            if parsed.tensors.contains_key("decoder/embedding/packed64") {
+        let (embedding_codes, embedding_packed) = if parsed.derived_layouts
+            && parsed.tensors.contains_key("decoder/embedding/quantized")
+        {
+            // TRMED003 carries the natural-order codes as a derived
+            // tensor alongside packed64; prefer it (the head borrows
+            // it verbatim below when the backing allows).
+            let t = parsed.expect("decoder/embedding/quantized", 2, &[32768, 640])?;
+            (parsed.u8_vec(t), false)
+        } else if parsed.tensors.contains_key("decoder/embedding/packed64") {
                 let t = parsed.expect("decoder/embedding/packed64", 2, &[512, 5, 512, 16])?;
                 (parsed.u8_vec(t), true)
             } else {
                 let t = parsed.expect("decoder/embedding/quantized", 2, &[32768, 640])?;
                 (parsed.u8_vec(t), false)
             };
+        // The embedding codes in natural [token][feature] order,
+        // computed at most once and only if a fallback needs them
+        // (TRMED003 borrows both head stores from the archive).
+        let mut nat_codes: Option<Vec<u8>> = None;
         let head = if cfg!(target_arch = "aarch64") {
             // CompactHead form: natural-order uint8 codes, dequantized
-            // at use (decoder::head_block).
-            let mut codes = vec![0u8; 32768 * 640];
-            let mut tiled = vec![0.0f32; 32768 * 640];
-            for v in 0..32768usize {
-                for j in 0..640usize {
-                    let code = embedding_code(&embedding_codes, embedding_packed, v, j);
-                    codes[v * 640 + j] = code;
-                    tiled[(v & !127) * 640 + j * 128 + (v & 127)] =
-                        (code as i32 - embedding_zero) as f32 * embedding_scale;
+            // at use (decoder::head_block). On TRMED003 both the codes
+            // and the FP32 tiles are borrowed zero-copy from the
+            // archive's derived tensors; otherwise they are
+            // materialized here exactly as before.
+            let tiled: F32Store = if parsed.derived_layouts {
+                match (borrow_base, parsed.tensors.get("decoder/head_tiled")) {
+                    (Some(base), Some(t)) => {
+                        if t.ty != 1 || t.shape != [32768, 640] || t.bytes != 32768 * 640 * 4 {
+                            return Err("bad derived tensor decoder/head_tiled".into());
+                        }
+                        F32Store::Borrowed {
+                            ptr: unsafe { base.add(t.offset) } as *const f32,
+                            len: 32768 * 640,
+                        }
+                    }
+                    (Some(_), None) => {
+                        return Err("TRMED003 archive missing decoder/head_tiled".into());
+                    }
+                    _ => F32Store::Owned(crate::layout::pack_f32_tiled(
+                        nat_codes.get_or_insert_with(|| {
+                            natural_codes(&embedding_codes, embedding_packed)
+                        }),
+                        32768,
+                        640,
+                        embedding_zero,
+                        embedding_scale,
+                    )),
                 }
-            }
+            } else {
+                F32Store::Owned(crate::layout::pack_f32_tiled(
+                    nat_codes.get_or_insert_with(|| {
+                        natural_codes(&embedding_codes, embedding_packed)
+                    }),
+                    32768,
+                    640,
+                    embedding_zero,
+                    embedding_scale,
+                ))
+            };
+            let codes: ByteStore = if parsed.derived_layouts && !embedding_packed {
+                // `embedding_codes` here IS the derived natural-order
+                // tensor's bytes; borrow them from the backing.
+                match borrow_base {
+                    Some(base) => {
+                        let t =
+                            parsed.expect("decoder/embedding/quantized", 2, &[32768, 640])?;
+                        ByteStore::Borrowed {
+                            ptr: unsafe { base.add(t.offset) },
+                            len: 32768 * 640,
+                        }
+                    }
+                    None => ByteStore::Owned(embedding_codes.clone()),
+                }
+            } else if !embedding_packed {
+                ByteStore::Owned(embedding_codes.clone())
+            } else {
+                ByteStore::Owned(
+                    nat_codes
+                        .get_or_insert_with(|| natural_codes(&embedding_codes, true))
+                        .clone(),
+                )
+            };
             HeadStore::Codes { codes, scale: embedding_scale, zero: embedding_zero, tiled }
         } else {
             // x86 head: the FP32 embedding matrix materialized in
             // 128-vocab-column tiles, offset(v, j) = (v & !127) * 640 +
             // j * 128 + (v & 127), value = float(int(code) - zero) * scale.
-            let mut head = vec![0.0f32; 32768 * 640];
-            for v in 0..32768usize {
-                for j in 0..640usize {
-                    let code = embedding_code(&embedding_codes, embedding_packed, v, j);
-                    head[(v & !127) * 640 + j * 128 + (v & 127)] =
-                        (code as i32 - embedding_zero) as f32 * embedding_scale;
-                }
-            }
-            HeadStore::Tiled(head)
+            HeadStore::Tiled(F32Store::Owned(crate::layout::pack_f32_tiled(
+                nat_codes
+                    .get_or_insert_with(|| natural_codes(&embedding_codes, embedding_packed)),
+                32768,
+                640,
+                embedding_zero,
+                embedding_scale,
+            )))
         };
 
         Ok(Model {

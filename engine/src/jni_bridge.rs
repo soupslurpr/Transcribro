@@ -10,7 +10,7 @@
 //! mutex/condvar pair + atomic.
 //!
 //! Model loading follows the mmap ruling: the medium archive ships
-//! UNCOMPRESSED (`models/standalone/medium.trm`, TRMED001/TRMED002) in a
+//! UNCOMPRESSED (`models/standalone/medium.trm`, TRMED001/2/3) in a
 //! noCompress asset slot, so `openFd` yields a file extent that is
 //! memory-mapped in place -- the OS page cache is shared across the
 //! dictation/file processes and pages are faulted on demand, never a
@@ -38,7 +38,7 @@ const VAD_MODEL: &str = "models/silero_vad/ggml-silero-v6.2.0.bin";
 /// The engine's hold on the model archive: the shared
 /// `crate::model::Backing` (mmap of the asset extent, or owned bytes
 /// for the decoded/streamed fallback), reference-counted because the
-/// Model borrows its TRMED002 weights from it zero-copy.
+/// Model borrows its TRMED002/TRMED003 weights from it zero-copy.
 type SharedBacking = std::sync::Arc<crate::model::Backing>;
 
 fn fail(env: &mut Env, message: &str) {
@@ -119,7 +119,9 @@ fn mmap_asset<'a>(env: &mut Env<'a>, assets: &JObject<'a>, name: &str) -> Result
             .call_method(&afd, jni_str!("getLength"), jni_sig!("()J"), &[])
             .and_then(|v| v.j())
             .map_err(|_| "length".to_string())?;
-        if fd < 0 || start < 0 || length <= 0 || length > 512 * 1024 * 1024 {
+        // Sanity bound only -- the mmap itself is the real limit.
+        // TRMED003 (baked kernel layouts) is ~937 MiB, so cap at 2 GiB.
+        if fd < 0 || start < 0 || length <= 0 || length > 2 * 1024 * 1024 * 1024 {
             return Err("invalid model asset extent".into());
         }
         let prefix = (start as usize) % 4096;
@@ -156,7 +158,7 @@ fn decode_zstd(bytes: &[u8]) -> Result<Vec<u8>, String> {
 
 fn triage(raw: SharedBacking) -> Result<SharedBacking, String> {
     let bytes = raw.as_slice();
-    if bytes.starts_with(b"TRMED001") || bytes.starts_with(b"TRMED002") {
+    if bytes.starts_with(b"TRMED001") || bytes.starts_with(b"TRMED002") || bytes.starts_with(b"TRMED003") {
         return Ok(raw);
     }
     if bytes.len() >= 4 && bytes[..4] == [0x28, 0xb5, 0x2f, 0xfd] {

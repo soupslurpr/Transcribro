@@ -19,6 +19,7 @@
 
 mod convert;
 mod convert_v2;
+mod convert_v3;
 mod fbs;
 mod ort;
 mod prepare;
@@ -123,6 +124,31 @@ fn dispatch(args: &[String]) -> Result<String, String> {
                 _ => return Err("convert-v2 needs both --input and --output, or two positional paths".into()),
             };
             convert_v2::run_convert_v2(&input, &output)
+        }
+        "convert-v3" => {
+            // Path args, positional or flagged:
+            //   convert-v3 IN.trm2 OUT.trm3
+            //   convert-v3 --input IN.trm2 --output OUT.trm3
+            let (input, output) = match (flag(rest, "--input"), flag(rest, "--output")) {
+                (Some(i), Some(o)) => (PathBuf::from(i), PathBuf::from(o)),
+                (None, None) => {
+                    let mut pos: Vec<&str> = Vec::new();
+                    let mut it = rest.iter();
+                    while let Some(a) = it.next() {
+                        if a == "--root" {
+                            it.next();
+                        } else if !a.starts_with("--") {
+                            pos.push(a.as_str());
+                        }
+                    }
+                    if pos.len() != 2 {
+                        return Err("usage: convert-v3 [--input] IN.trm2 [--output] OUT.trm3".into());
+                    }
+                    (PathBuf::from(pos[0]), PathBuf::from(pos[1]))
+                }
+                _ => return Err("convert-v3 needs both --input and --output, or two positional paths".into()),
+            };
+            convert_v3::run_convert_v3(&input, &output)
         }
         "dump" => dump(rest),
         _ => Err(format!("unknown subcommand {cmd}")),

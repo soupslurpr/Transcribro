@@ -10,6 +10,7 @@ mod frontend;
 #[cfg(target_os = "android")]
 mod jni_bridge;
 mod kernels;
+pub mod layout;
 mod model;
 mod outer_vad;
 mod pool;
