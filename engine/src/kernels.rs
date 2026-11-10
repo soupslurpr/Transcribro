@@ -164,6 +164,15 @@ unsafe fn sumexp_vec(x: std::arch::aarch64::float32x4_t) -> std::arch::aarch64::
     scale_pow2_vec(p, m)
 }
 
+/// Public handle on  for the banded attention
+/// softmax, which evaluates the same lane function per element.
+#[cfg(target_arch = "aarch64")]
+pub unsafe fn sumexp_vec_pub(
+    x: std::arch::aarch64::float32x4_t,
+) -> std::arch::aarch64::float32x4_t {
+    unsafe { sumexp_vec(x) }
+}
+
 #[cfg(target_arch = "aarch64")]
 fn softmax_row_neon(row: &mut [f32]) {
     use std::arch::aarch64::*;
@@ -231,6 +240,191 @@ fn softmax_row_neon(row: &mut [f32]) {
 /// StrideK walk over B columns is cache-hostile and is the single
 /// biggest on-device cost. Rows are split across scoped threads for
 /// large problems.
+/// Cache-blocked NEON SGEMM (NoTrans/NoTrans) over rows
+/// `t0..t1` of A: C = A * B with an 8x8 register tile. Each
+/// output element accumulates over k ascending in a single FMA
+/// chain starting from `init` (0.0, or the row's bias when
+/// `bias` is given), which is exactly the per-element operation
+/// order of the rank-1 forms this replaces -- results are
+/// bit-identical to them. `c` is the row-`t0` slice of the
+/// output (row stride `m`), matching `gemm_rows_neon`.
+/// Narrow-width GEMM for `gemm_blocked_rows` when the column
+/// count m is 1..8: 8-row tiles with scalar accumulators in
+/// registers (width is a const generic). Per-element accumulation
+/// is the same ascending-k FMA chain from the bias init as the
+/// wide kernel's tails, so results are bit-identical.
+#[cfg(target_arch = "aarch64")]
+fn gemm_small<const M: usize>(
+    a: &[f32],
+    t0: usize,
+    t1: usize,
+    k: usize,
+    b: &[f32],
+    c: &mut [f32],
+    bias: Option<&[f32]>,
+) {
+    let init_of = |t: usize| bias.map(|bb| bb[t]).unwrap_or(0.0);
+    let mut t = t0;
+    while t + 8 <= t1 {
+        let mut acc = [[0.0f32; M]; 8];
+        for (i, arow) in acc.iter_mut().enumerate() {
+            for v in arow.iter_mut() {
+                *v = init_of(t + i);
+            }
+        }
+        let ap = a.as_ptr();
+        let bp = b.as_ptr();
+        for kk in 0..k {
+            let brow = unsafe { bp.add(kk * M) };
+            for i in 0..8 {
+                let av = unsafe { *ap.add((t + i) * k + kk) };
+                for j in 0..M {
+                    acc[i][j] = unsafe { (*brow.add(j)).mul_add(av, acc[i][j]) };
+                }
+            }
+        }
+        for i in 0..8 {
+            for j in 0..M {
+                c[(t + i - t0) * M + j] = acc[i][j];
+            }
+        }
+        t += 8;
+    }
+    while t < t1 {
+        for j in 0..M {
+            let mut total = init_of(t);
+            for kk in 0..k {
+                total = a[t * k + kk].mul_add(b[kk * M + j], total);
+            }
+            c[(t - t0) * M + j] = total;
+        }
+        t += 1;
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+fn gemm_blocked_rows(
+    a: &[f32],
+    t0: usize,
+    t1: usize,
+    k: usize,
+    b: &[f32],
+    m: usize,
+    c: &mut [f32],
+    bias: Option<&[f32]>,
+) {
+    use std::arch::aarch64::*;
+    if m < 8 {
+        // Narrow problems (the VAD conv stack: time extents 1..4)
+        // fall off the 8-wide tile entirely; use the const-width
+        // kernel so accumulators stay in registers.
+        match m {
+            1 => gemm_small::<1>(a, t0, t1, k, b, c, bias),
+            2 => gemm_small::<2>(a, t0, t1, k, b, c, bias),
+            3 => gemm_small::<3>(a, t0, t1, k, b, c, bias),
+            4 => gemm_small::<4>(a, t0, t1, k, b, c, bias),
+            5 => gemm_small::<5>(a, t0, t1, k, b, c, bias),
+            6 => gemm_small::<6>(a, t0, t1, k, b, c, bias),
+            7 => gemm_small::<7>(a, t0, t1, k, b, c, bias),
+            _ => {}
+        }
+        return;
+    }
+    let init_of = |t: usize| bias.map(|bb| bb[t]).unwrap_or(0.0);
+    // Column panels on the outside: a 96-column panel of B
+    // (k * 96 * 4 bytes; 96 is a multiple of both tile widths,
+    // 8 and 12, so panels never strand a scalar column tail) is
+    // consumed by every row tile while it is still
+    // cache-resident, instead of re-streaming all of B from
+    // memory for each 8-row tile. Per-element accumulation
+    // order is unchanged (one ascending-k pass from the bias
+    // init per output), so results are bit-identical.
+    let mut j0 = 0usize;
+    while j0 < m {
+        let jend = (j0 + 96).min(m);
+        let mut t = t0;
+        // 8-row tiles; a final partial tile clamps its A loads
+        // to the last real row and guards its stores, so rows
+        // t1 % 8 != 0 never fall into a scalar path.
+        while t < t1 {
+            let here = (t1 - t).min(8);
+            let mut rptr = [std::ptr::null::<f32>(); 8];
+            for i in 0..8 {
+                rptr[i] = unsafe { a.as_ptr().add((t + i.min(here - 1)) * k) };
+            }
+            let mut j = j0;
+            while j + 8 <= jend {
+                unsafe {
+                    let mut acc = [[vdupq_n_f32(0.0); 2]; 8];
+                    for (i, arow) in acc.iter_mut().enumerate() {
+                        let v = vdupq_n_f32(init_of(t + i.min(here - 1)));
+                        arow[0] = v;
+                        arow[1] = v;
+                    }
+                    let mut bp = b.as_ptr().add(j);
+                    // Lane-FMA main loop over k in groups of 4:
+                    // A is loaded as one vector per row per group
+                    // and consumed lane by lane, cutting the A
+                    // load count 4x vs per-kk dup loads. The
+                    // per-element chain still visits kk in
+                    // ascending order with one FMA each --
+                    // bit-identical results.
+                    let k4 = k / 4;
+                    for g in 0..k4 {
+                        let bv = [
+                            [vld1q_f32(bp), vld1q_f32(bp.add(4))],
+                            [vld1q_f32(bp.add(m)), vld1q_f32(bp.add(m + 4))],
+                            [vld1q_f32(bp.add(2 * m)), vld1q_f32(bp.add(2 * m + 4))],
+                            [vld1q_f32(bp.add(3 * m)), vld1q_f32(bp.add(3 * m + 4))],
+                        ];
+                        for i in 0..8 {
+                            let av4 = vld1q_f32(rptr[i].add(4 * g));
+                            acc[i][0] = vfmaq_laneq_f32::<0>(acc[i][0], bv[0][0], av4);
+                            acc[i][1] = vfmaq_laneq_f32::<0>(acc[i][1], bv[0][1], av4);
+                            acc[i][0] = vfmaq_laneq_f32::<1>(acc[i][0], bv[1][0], av4);
+                            acc[i][1] = vfmaq_laneq_f32::<1>(acc[i][1], bv[1][1], av4);
+                            acc[i][0] = vfmaq_laneq_f32::<2>(acc[i][0], bv[2][0], av4);
+                            acc[i][1] = vfmaq_laneq_f32::<2>(acc[i][1], bv[2][1], av4);
+                            acc[i][0] = vfmaq_laneq_f32::<3>(acc[i][0], bv[3][0], av4);
+                            acc[i][1] = vfmaq_laneq_f32::<3>(acc[i][1], bv[3][1], av4);
+                        }
+                        bp = bp.add(4 * m);
+                    }
+                    for kk in 4 * k4..k {
+                        let bv0 = vld1q_f32(bp);
+                        let bv1 = vld1q_f32(bp.add(4));
+                        for i in 0..8 {
+                            let av = vld1q_dup_f32(rptr[i].add(kk));
+                            acc[i][0] = vfmaq_f32(acc[i][0], av, bv0);
+                            acc[i][1] = vfmaq_f32(acc[i][1], av, bv1);
+                        }
+                        bp = bp.add(m);
+                    }
+                    for i in 0..here {
+                        let cp = c.as_mut_ptr().add((t + i - t0) * m + j);
+                        vst1q_f32(cp, acc[i][0]);
+                        vst1q_f32(cp.add(4), acc[i][1]);
+                    }
+                }
+                j += 8;
+            }
+            // Column tail (< 8): same per-element FMA chain, scalar.
+            while j < jend {
+                for i in 0..here {
+                    let mut total = init_of(t + i);
+                    for kk in 0..k {
+                        total = a[(t + i) * k + kk].mul_add(b[kk * m + j], total);
+                    }
+                    c[(t + i - t0) * m + j] = total;
+                }
+                j += 1;
+            }
+            t += 8;
+        }
+        j0 = jend;
+    }
+}
+
 #[cfg(target_arch = "aarch64")]
 fn gemm_nn_neon(a: &[f32], n: usize, k: usize, b: &[f32], m: usize, c: &mut [f32]) {
     let work = (n as u64) * (k as u64) * (m as u64);
@@ -244,7 +438,7 @@ fn gemm_nn_neon(a: &[f32], n: usize, k: usize, b: &[f32], m: usize, c: &mut [f32
         });
         return;
     }
-    gemm_rows_neon(a, 0, n, k, b, m, c);
+    gemm_blocked_rows(a, 0, n, k, b, m, c, None);
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -308,43 +502,42 @@ fn conv1d_neon(
     use std::arch::aarch64::*;
     let count = (length + 2 * pad - kernel) / stride + 1;
     let k_total = channels * kernel;
-    let mut columns = vec![0.0f32; k_total * count];
-    for c in 0..channels {
-        for kw in 0..kernel {
-            let row = (c * kernel + kw) * count;
-            for t in 0..count {
-                let pos = t as isize * stride as isize + kw as isize - pad as isize;
-                if pos >= 0 && (pos as usize) < length {
-                    columns[row + t] = input[c * length + pos as usize];
-                }
-            }
-        }
-    }
+    // Panel-wise im2col: build 96 output columns, GEMM them
+    // while the panel is still cache-hot, scatter to the output.
+    // (Building the whole [k][count] matrix first streams up to
+    // ~100 MB through memory twice for the frontend shapes.)
+    // Per-element results are identical (same GEMM over the same
+    // column values); only the materialization is blocked.
     let mut out = vec![0.0f32; filters * count];
-    for f in 0..filters {
-        let w_row = &weight[f * k_total..(f + 1) * k_total];
-        let init = bias.map(|b| b[f]).unwrap_or(0.0);
-        let orow = &mut out[f * count..(f + 1) * count];
-        orow.fill(init);
-        for kk in 0..k_total {
-            let w = w_row[kk];
-            let col = &columns[kk * count..(kk + 1) * count];
-            unsafe {
-                let wv = vdupq_n_f32(w);
-                let mut t = 0usize;
-                while t + 4 <= count {
-                    let cur = vld1q_f32(orow.as_ptr().add(t));
-                    let v = vfmaq_f32(cur, wv, vld1q_f32(col.as_ptr().add(t)));
-                    vst1q_f32(orow.as_mut_ptr().add(t), v);
-                    t += 4;
-                }
-                while t < count {
-                    orow[t] = w.mul_add(col[t], orow[t]);
-                    t += 1;
+    let mut panel = crate::scratch::take_f32(k_total * 96);
+    let mut pout = crate::scratch::take_f32(filters * 96);
+    pout.clear();
+    pout.resize(filters * 96, 0.0);
+    let mut t0 = 0usize;
+    while t0 < count {
+        let w = (count - t0).min(96);
+        panel.clear();
+        panel.resize(k_total * w, 0.0);
+        for c in 0..channels {
+            for kw in 0..kernel {
+                let row = (c * kernel + kw) * w;
+                for t in 0..w {
+                    let pos = (t0 + t) as isize * stride as isize + kw as isize - pad as isize;
+                    if pos >= 0 && (pos as usize) < length {
+                        panel[row + t] = input[c * length + pos as usize];
+                    }
                 }
             }
         }
+        gemm_blocked_rows(weight, 0, filters, k_total, &panel, w, &mut pout, bias);
+        for f in 0..filters {
+            out[f * count + t0..f * count + t0 + w]
+                .copy_from_slice(&pout[f * w..(f + 1) * w]);
+        }
+        t0 += w;
     }
+    crate::scratch::put_f32(panel);
+    crate::scratch::put_f32(pout);
     out
 }
 
@@ -422,6 +615,31 @@ pub fn gelu_erf_inplace(values: &mut [f32]) {
         let mut i = 0usize;
         unsafe {
             let sq = vdupq_n_f32(SQRT2);
+            // Four vectors per pass: erf_vec's Horner chains are
+            // latency-bound when run one vector at a time.
+            while i + 16 <= n {
+                let base = values.as_ptr().add(i);
+                let out = values.as_mut_ptr().add(i);
+                let v0 = vld1q_f32(base);
+                let v1 = vld1q_f32(base.add(4));
+                let v2 = vld1q_f32(base.add(8));
+                let v3 = vld1q_f32(base.add(12));
+                let e0 = erf_vec(vdivq_f32(v0, sq));
+                let e1 = erf_vec(vdivq_f32(v1, sq));
+                let e2 = erf_vec(vdivq_f32(v2, sq));
+                let e3 = erf_vec(vdivq_f32(v3, sq));
+                let h = vdupq_n_f32(0.5);
+                let one = vdupq_n_f32(1.0);
+                let f0 = vmulq_f32(h, vaddq_f32(e0, one));
+                let f1 = vmulq_f32(h, vaddq_f32(e1, one));
+                let f2 = vmulq_f32(h, vaddq_f32(e2, one));
+                let f3 = vmulq_f32(h, vaddq_f32(e3, one));
+                vst1q_f32(out, vmulq_f32(v0, f0));
+                vst1q_f32(out.add(4), vmulq_f32(v1, f1));
+                vst1q_f32(out.add(8), vmulq_f32(v2, f2));
+                vst1q_f32(out.add(12), vmulq_f32(v3, f3));
+                i += 16;
+            }
             while i + 4 <= n {
                 let v = vld1q_f32(values.as_ptr().add(i));
                 let e = erf_vec(vdivq_f32(v, sq));
@@ -510,11 +728,50 @@ pub fn gemv_t(c: &mut [f32], x: &[f32], w: &[f32], accumulate: bool) {
 /// 4-row-block reduction tree; then `total + seed` where seed is the old C
 /// value for beta = 1 and +0.0 for beta = 0 (the kernel always adds it).
 /// `w` is row-major [rows][k].
+#[cfg(not(target_arch = "aarch64"))]
 pub fn m1tb_dot(x: &[f32], w_row: &[f32], seed: f32, beta: bool) -> f32 {
     let k = x.len();
     let mut lane = [0.0f32; 8];
     for kk in 0..k {
         lane[kk % 8] = lane[kk % 8] + x[kk] * w_row[kk];
+    }
+    let lo = ((lane[0] + lane[1]) + lane[2]) + lane[3];
+    let hi = ((lane[4] + lane[5]) + lane[6]) + lane[7];
+    (lo + hi) + if beta { seed } else { 0.0 }
+}
+
+/// aarch64 twin of `m1tb_dot`: two float32x4 partials hold lanes
+/// 0..8; elementwise multiply then add (never FMA), matching the
+/// scalar accumulation bit for bit.
+#[cfg(target_arch = "aarch64")]
+pub fn m1tb_dot(x: &[f32], w_row: &[f32], seed: f32, beta: bool) -> f32 {
+    use std::arch::aarch64::*;
+    let k = x.len();
+    let mut lane = [0.0f32; 8];
+    unsafe {
+        let mut p0 = vdupq_n_f32(0.0);
+        let mut p1 = vdupq_n_f32(0.0);
+        let mut j = 0usize;
+        while j + 8 <= k {
+            p0 = vaddq_f32(
+                p0,
+                vmulq_f32(vld1q_f32(x.as_ptr().add(j)), vld1q_f32(w_row.as_ptr().add(j))),
+            );
+            p1 = vaddq_f32(
+                p1,
+                vmulq_f32(
+                    vld1q_f32(x.as_ptr().add(j + 4)),
+                    vld1q_f32(w_row.as_ptr().add(j + 4)),
+                ),
+            );
+            j += 8;
+        }
+        vst1q_f32(lane.as_mut_ptr(), p0);
+        vst1q_f32(lane.as_mut_ptr().add(4), p1);
+        while j < k {
+            lane[j % 8] = lane[j % 8] + x[j] * w_row[j];
+            j += 1;
+        }
     }
     let lo = ((lane[0] + lane[1]) + lane[2]) + lane[3];
     let hi = ((lane[4] + lane[5]) + lane[6]) + lane[7];
@@ -669,6 +926,36 @@ pub fn conv1d(
     out
 }
 
+/// SwiGLU gate for the decoder FFN: gated[r][j] =
+/// expanded[r][j] * (x * logistic(x)) with x = expanded[r][width + j],
+/// rows laid out at stride 2 * width. The vector path evaluates
+/// `logistic_vec`, which is bit-identical to scalar `logistic`
+/// on finite inputs (same Horner/FMA sequence, exact divide,
+/// separate multiplies -- no FMA in the gate itself).
+#[cfg(target_arch = "aarch64")]
+pub fn swiglu_gate_neon(expanded: &[f32], rows: usize, width: usize, gated: &mut [f32]) {
+    use std::arch::aarch64::*;
+    for r in 0..rows {
+        let src = r * width * 2;
+        let dst = r * width;
+        let mut j = 0usize;
+        while j + 4 <= width {
+            unsafe {
+                let xv = vld1q_f32(expanded.as_ptr().add(src + width + j));
+                let silu = vmulq_f32(xv, logistic_vec(xv));
+                let g = vld1q_f32(expanded.as_ptr().add(src + j));
+                vst1q_f32(gated.as_mut_ptr().add(dst + j), vmulq_f32(g, silu));
+            }
+            j += 4;
+        }
+        while j < width {
+            let x = expanded[src + width + j];
+            gated[dst + j] = expanded[src + j] * (x * logistic(x));
+            j += 1;
+        }
+    }
+}
+
 /// MLAS logistic (Eigen rational polynomial, FMA Horner form as dispatched
 /// on x86). Coefficients from core/mlas/lib/logistic.cpp.
 pub fn logistic(x: f32) -> f32 {
@@ -716,6 +1003,25 @@ pub fn silu_inplace(values: &mut [f32]) {
         let n = values.len();
         let mut i = 0usize;
         unsafe {
+            // Four vectors per pass (logistic_vec's Horner chains
+            // are latency-bound one at a time).
+            while i + 16 <= n {
+                let bp = values.as_ptr().add(i);
+                let v0 = vld1q_f32(bp);
+                let v1 = vld1q_f32(bp.add(4));
+                let v2 = vld1q_f32(bp.add(8));
+                let v3 = vld1q_f32(bp.add(12));
+                let r0 = vmulq_f32(v0, logistic_vec(v0));
+                let r1 = vmulq_f32(v1, logistic_vec(v1));
+                let r2 = vmulq_f32(v2, logistic_vec(v2));
+                let r3 = vmulq_f32(v3, logistic_vec(v3));
+                let op = values.as_mut_ptr().add(i);
+                vst1q_f32(op, r0);
+                vst1q_f32(op.add(4), r1);
+                vst1q_f32(op.add(8), r2);
+                vst1q_f32(op.add(12), r3);
+                i += 16;
+            }
             while i + 4 <= n {
                 let v = vld1q_f32(values.as_ptr().add(i));
                 let r = vmulq_f32(v, logistic_vec(v));

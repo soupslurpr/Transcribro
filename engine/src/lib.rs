@@ -13,6 +13,8 @@ mod kernels;
 mod model;
 mod outer_vad;
 mod pool;
+mod prof;
+mod scratch;
 mod stream;
 mod vad;
 

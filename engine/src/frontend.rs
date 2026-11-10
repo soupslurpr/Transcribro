@@ -34,7 +34,9 @@ pub fn frontend(
         return Err("frontend output capacity".into());
     }
 
-    let mut hidden = vec![0.0f32; count * 80];
+    let mut hidden = crate::scratch::take_f32(count * 80);
+    hidden.clear();
+    hidden.resize(count * 80, 0.0);
     for i in 0..count * 80 {
         let x = if i < sample_len {
             state.sample_buffer[i]
@@ -62,11 +64,15 @@ pub fn frontend(
     }
 
     let fw = &model.frontend;
-    let mut projected = vec![0.0f32; count * 768];
+    let mut projected = crate::scratch::take_f32(count * 768);
+    projected.clear();
+    projected.resize(count * 768, 0.0);
     gemm_nn(&hidden, count, 80, &fw.linear, 768, &mut projected);
     silu_inplace(&mut projected);
 
-    let mut joined = vec![0.0f32; 768 * (count + 4)];
+    let mut joined = crate::scratch::take_f32(768 * (count + 4));
+    joined.clear();
+    joined.resize(768 * (count + 4), 0.0);
     for c in 0..768 {
         joined[c * (count + 4)..c * (count + 4) + 4]
             .copy_from_slice(&state.conv1[c * 4..c * 4 + 4]);
@@ -88,13 +94,16 @@ pub fn frontend(
     debug_assert_eq!(expanded.len(), 1536 * first);
     silu_inplace(&mut expanded);
 
-    let mut hidden2 = vec![0.0f32; 1536 * (first + 4)];
+    let mut hidden2 = crate::scratch::take_f32(1536 * (first + 4));
+    hidden2.clear();
+    hidden2.resize(1536 * (first + 4), 0.0);
     for c in 0..1536 {
         hidden2[c * (first + 4)..c * (first + 4) + 4]
             .copy_from_slice(&state.conv2[c * 4..c * 4 + 4]);
         hidden2[c * (first + 4) + 4..c * (first + 4) + 4 + first]
             .copy_from_slice(&expanded[c * first..(c + 1) * first]);
     }
+    crate::scratch::put_f32(expanded);
     let gated = conv1d(
         &hidden2,
         1536,
@@ -124,5 +133,9 @@ pub fn frontend(
     state.sample_buffer = [0.0; 79];
     state.sample_len = 0;
     state.frame_count += count as i64;
+    crate::scratch::put_f32(hidden);
+    crate::scratch::put_f32(projected);
+    crate::scratch::put_f32(joined);
+    crate::scratch::put_f32(hidden2);
     Ok(second)
 }

@@ -17,7 +17,7 @@
 //! probe-fitted at Gate 4; the scores GEMM keeps the FMA chain at every
 //! row count.
 
-use crate::encoder::{heads, normalize, project, quantize, run, unheads};
+use crate::encoder::{heads, normalize, project_s, quantize, run_s, unheads};
 use crate::kernels;
 use crate::model::{embedding_code, Model};
 
@@ -57,6 +57,9 @@ fn attention(
     past: usize,
     head_stride: usize,
 ) -> Vec<f32> {
+    let _pt = crate::prof::Timer::start();
+    let _site_mask = mask;
+    crate::prof::add(&crate::prof::ATTN_DEC_PAIRS, (10 * rows * memory) as u64);
     let mut out = vec![0.0f32; rows * 640];
     let mut scores = vec![0.0f32; rows * memory];
     for h in 0..10 {
@@ -126,6 +129,11 @@ fn attention(
             );
         }
     }
+    _pt.stop(if _site_mask == 1 {
+        &crate::prof::ATTN_DEC_SELF_NS
+    } else {
+        &crate::prof::ATTN_DEC_CROSS_NS
+    });
     out
 }
 
@@ -182,6 +190,118 @@ fn head_dot(x: &[f32], codes: &[u8], zero: i32) -> f32 {
     sum
 }
 
+/// Widen 16 u8 codes to four f32x4 vectors of (code - zero),
+/// exactly as `head_dot` does (small integers: exact in f32).
+#[cfg(target_arch = "aarch64")]
+unsafe fn head_widen16(
+    cp: *const u8,
+    zv: std::arch::aarch64::float32x4_t,
+) -> [std::arch::aarch64::float32x4_t; 4] {
+    use std::arch::aarch64::*;
+    unsafe {
+        let c16 = vld1q_u8(cp);
+        let lo16 = vmovl_u8(vget_low_u8(c16));
+        let hi16 = vmovl_u8(vget_high_u8(c16));
+        [
+            vsubq_f32(
+                vcvtq_f32_s32(vreinterpretq_s32_u32(vmovl_u16(vget_low_u16(lo16)))),
+                zv,
+            ),
+            vsubq_f32(
+                vcvtq_f32_s32(vreinterpretq_s32_u32(vmovl_u16(vget_high_u16(lo16)))),
+                zv,
+            ),
+            vsubq_f32(
+                vcvtq_f32_s32(vreinterpretq_s32_u32(vmovl_u16(vget_low_u16(hi16)))),
+                zv,
+            ),
+            vsubq_f32(
+                vcvtq_f32_s32(vreinterpretq_s32_u32(vmovl_u16(vget_high_u16(hi16)))),
+                zv,
+            ),
+        ]
+    }
+}
+
+/// Tiled output-head kernel for the `Codes` store: computes one
+/// 128-column block ([rows][128] output) from the block's codes
+/// ([128][640]). Per logit the accumulation is bit-identical to
+/// `head_dot` (four partial vectors over 16-wide j blocks,
+/// combined ((p0 + p1) + (p2 + p3)) then ((l0 + l1) + (l2 + l3)),
+/// scaled at the end; depth 640 has no scalar tail). The tiling
+/// only shares work: x loads across a 4-vocab tile when rows == 1,
+/// and the code widening across rows (in chunks of 4) otherwise.
+#[cfg(target_arch = "aarch64")]
+unsafe fn head_codes(
+    x: &[f32],
+    rows: usize,
+    codes: &[u8],
+    zero: i32,
+    scale: f32,
+    block: &mut [f32],
+) {
+    use std::arch::aarch64::*;
+    let zv = vdupq_n_f32(zero as f32);
+    unsafe {
+        if rows == 1 {
+            for vt in (0..128).step_by(4) {
+                let mut pv = [[vdupq_n_f32(0.0); 4]; 4];
+                for j16 in 0..40 {
+                    let xb = x.as_ptr().add(j16 * 16);
+                    let xv = [
+                        vld1q_f32(xb),
+                        vld1q_f32(xb.add(4)),
+                        vld1q_f32(xb.add(8)),
+                        vld1q_f32(xb.add(12)),
+                    ];
+                    for vi in 0..4 {
+                        let q = head_widen16(codes.as_ptr().add((vt + vi) * 640 + j16 * 16), zv);
+                        for g in 0..4 {
+                            pv[vi][g] = vfmaq_f32(pv[vi][g], xv[g], q[g]);
+                        }
+                    }
+                }
+                for vi in 0..4 {
+                    let s = vaddq_f32(
+                        vaddq_f32(pv[vi][0], pv[vi][1]),
+                        vaddq_f32(pv[vi][2], pv[vi][3]),
+                    );
+                    let mut lanes = [0.0f32; 4];
+                    vst1q_f32(lanes.as_mut_ptr(), s);
+                    block[vt + vi] = ((lanes[0] + lanes[1]) + (lanes[2] + lanes[3])) * scale;
+                }
+            }
+            return;
+        }
+        for rchunk in (0..rows).step_by(4) {
+            let rn = (rows - rchunk).min(4);
+            for v in 0..128 {
+                let mut pv = [[vdupq_n_f32(0.0); 4]; 4];
+                for j16 in 0..40 {
+                    let q = head_widen16(codes.as_ptr().add(v * 640 + j16 * 16), zv);
+                    for ri in 0..rn {
+                        let xb = x.as_ptr().add((rchunk + ri) * 640 + j16 * 16);
+                        for g in 0..4 {
+                            let xv = vld1q_f32(xb.add(4 * g));
+                            pv[ri][g] = vfmaq_f32(pv[ri][g], xv, q[g]);
+                        }
+                    }
+                }
+                for ri in 0..rn {
+                    let s = vaddq_f32(
+                        vaddq_f32(pv[ri][0], pv[ri][1]),
+                        vaddq_f32(pv[ri][2], pv[ri][3]),
+                    );
+                    let mut lanes = [0.0f32; 4];
+                    vst1q_f32(lanes.as_mut_ptr(), s);
+                    block[(rchunk + ri) * 128 + v] =
+                        ((lanes[0] + lanes[1]) + (lanes[2] + lanes[3])) * scale;
+                }
+            }
+        }
+    }
+}
+
 fn head_block(model: &Model, normalized: &[f32], rows: usize, column: usize, block: &mut [f32]) {
     match &model.head {
         crate::model::HeadStore::Tiled(head) => {
@@ -194,17 +314,38 @@ fn head_block(model: &Model, normalized: &[f32], rows: usize, column: usize, blo
                 kernels::gemm_nn(normalized, rows, 640, b, 128, block);
             }
         }
-        crate::model::HeadStore::Codes { codes, scale, zero } => {
+        crate::model::HeadStore::Codes { codes, scale, zero, tiled } => {
             // CompactHead form (aarch64): logit(v) = sum_j x_j *
-            // (code(v, j) - zero) * scale, evaluated per vocab row in
-            // ascending j -- plain f32 accumulation (the aarch64 path
-            // has no bit-exactness bar; see GATE6.md S5).
-            for r in 0..rows {
-                let x = &normalized[r * 640..(r + 1) * 640];
-                for j in 0..128 {
-                    let v = column + j;
-                    let crow = &codes[v * 640..(v + 1) * 640];
-                    block[r * 128 + j] = head_dot(x, crow, *zero) * scale;
+            // (code(v, j) - zero) * scale. The tiled kernel keeps
+            // head_dot's exact per-logit accumulation (four j-lane
+            // partials over 16-blocks, combined pairwise) while
+            // sharing the u8->f32 widening across a 4-vocab tile
+            // (and across rows in bulk calls).
+            #[cfg(target_arch = "aarch64")]
+            {
+                if rows > 1 && !tiled.is_empty() {
+                    // Bulk head as FP32 GEMM over the dequantized
+                    // tiles (the C++ oracle's bulk structure; the
+                    // accumulation order differs from head_dot's
+                    // partials -- verified by the parity protocol).
+                    let b = &tiled[column * 640..column * 640 + 640 * 128];
+                    kernels::gemm_nn(normalized, rows, 640, b, 128, block);
+                } else {
+                    let b = &codes[column * 640..column * 640 + 640 * 128];
+                    unsafe {
+                        head_codes(normalized, rows, b, *zero, *scale, block);
+                    }
+                }
+            }
+            #[cfg(not(target_arch = "aarch64"))]
+            {
+                for r in 0..rows {
+                    let x = &normalized[r * 640..(r + 1) * 640];
+                    for j in 0..128 {
+                        let v = column + j;
+                        let crow = &codes[v * 640..(v + 1) * 640];
+                        block[r * 128 + j] = head_dot(x, crow, *zero) * scale;
+                    }
                 }
             }
         }
@@ -236,6 +377,13 @@ fn run_decoder(
     mut dest: Dest,
 ) -> Result<(), String> {
     let rows = tokens.len();
+    let _pt = crate::prof::Timer::start();
+    crate::prof::add(&crate::prof::DEC_CALLS, 1);
+    if rows == 1 {
+        crate::prof::add(&crate::prof::DEC_R1_CALLS, 1);
+    } else {
+        crate::prof::add(&crate::prof::DEC_BULK_TOKENS, rows as u64);
+    }
     let total = past + rows;
     let stride = match &dest {
         Dest::Cache(_) => CACHE_CAPACITY,
@@ -272,12 +420,14 @@ fn run_decoder(
     for layer in 0..14 {
         let normalized = normalize(&hidden, rows, 640, &model.decoder_norms[layer * 3]);
         let q_in = quantize(&normalized, rows, 640)?;
-        let qs = project(&model.decoder_matrices[layer * 8], &q_in, rows);
-        let ks = project(&model.decoder_matrices[layer * 8 + 1], &q_in, rows);
-        let vs = project(&model.decoder_matrices[layer * 8 + 2], &q_in, rows);
+        let qs = project_s(&model.decoder_matrices[layer * 8], &q_in, rows, 1);
+        let ks = project_s(&model.decoder_matrices[layer * 8 + 1], &q_in, rows, 1);
+        let vs = project_s(&model.decoder_matrices[layer * 8 + 2], &q_in, rows, 1);
+        let _tshuf = crate::prof::Timer::start();
         let mut qheads = heads(&qs, rows);
         let mut kheads = heads(&ks, rows);
         let vheads = heads(&vs, rows);
+        _tshuf.stop(&crate::prof::DEC_SHUF_NS);
         for h in 0..10 {
             for r in 0..rows {
                 for pair in 0..16 {
@@ -329,15 +479,21 @@ fn run_decoder(
                 stride * 64,
             )
         };
+        let _tshuf2 = crate::prof::Timer::start();
         let joined = unheads(&attended, rows);
-        let projected = run(&model.decoder_matrices[layer * 8 + 3], &joined, rows, 640)?;
+        _tshuf2.stop(&crate::prof::DEC_SHUF_NS);
+        let projected = run_s(&model.decoder_matrices[layer * 8 + 3], &joined, rows, 640, 1)?;
+        let _tres = crate::prof::Timer::start();
         for (h, p) in hidden.iter_mut().zip(&projected) {
             *h += p;
         }
+        _tres.stop(&crate::prof::DEC_RESID_NS);
         // Cross-attention over this layer's slice of the cross-KV.
         let normalized = normalize(&hidden, rows, 640, &model.decoder_norms[layer * 3 + 1]);
-        let qs = run(&model.decoder_matrices[layer * 8 + 4], &normalized, rows, 640)?;
+        let qs = run_s(&model.decoder_matrices[layer * 8 + 4], &normalized, rows, 640, 1)?;
+        let _tshuf3 = crate::prof::Timer::start();
         let qheads = heads(&qs, rows);
+        _tshuf3.stop(&crate::prof::DEC_SHUF_NS);
         let cross_base = layer * frames * 640;
         let attended = attention(
             &qheads,
@@ -349,30 +505,56 @@ fn run_decoder(
             0,
             frames * 64,
         );
+        let _tshuf4 = crate::prof::Timer::start();
         let joined = unheads(&attended, rows);
-        let projected = run(&model.decoder_matrices[layer * 8 + 5], &joined, rows, 640)?;
+        _tshuf4.stop(&crate::prof::DEC_SHUF_NS);
+        let projected = run_s(&model.decoder_matrices[layer * 8 + 5], &joined, rows, 640, 1)?;
+        let _tres = crate::prof::Timer::start();
         for (h, p) in hidden.iter_mut().zip(&projected) {
             *h += p;
         }
+        _tres.stop(&crate::prof::DEC_RESID_NS);
         // SwiGLU FFN: logistic on the second half, gated by the first.
         let normalized = normalize(&hidden, rows, 640, &model.decoder_norms[layer * 3 + 2]);
-        let expanded = run(&model.decoder_matrices[layer * 8 + 6], &normalized, rows, 640)?;
+        let expanded = run_s(&model.decoder_matrices[layer * 8 + 6], &normalized, rows, 640, 1)?;
         let width = 2560;
-        let mut gated = vec![0.0f32; rows * width];
-        for r in 0..rows {
-            for j in 0..width {
-                let x = expanded[r * width * 2 + width + j];
-                let silu = x * kernels::logistic(x);
-                gated[r * width + j] = expanded[r * width * 2 + j] * silu;
+        let mut gated = crate::scratch::take_f32(rows * width);
+        gated.clear();
+        gated.resize(rows * width, 0.0);
+        // SwiGLU gate. On aarch64 the 4-lane form is bit-identical
+        // to the scalar loop on finite inputs (kernels::logistic
+        // and its vector twin share the Horner/FMA sequence and
+        // the exact divide); other targets keep the scalar loop.
+        let _tgate = crate::prof::Timer::start();
+        #[cfg(target_arch = "aarch64")]
+        {
+            kernels::swiglu_gate_neon(&expanded, rows, width, &mut gated);
+        }
+        _tgate.stop(&crate::prof::DEC_GATE_NS);
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            for r in 0..rows {
+                for j in 0..width {
+                    let x = expanded[r * width * 2 + width + j];
+                    let silu = x * kernels::logistic(x);
+                    gated[r * width + j] = expanded[r * width * 2 + j] * silu;
+                }
             }
         }
-        let projected = run(&model.decoder_matrices[layer * 8 + 7], &gated, rows, width)?;
+        let projected = run_s(&model.decoder_matrices[layer * 8 + 7], &gated, rows, width, 1)?;
+        crate::scratch::put_f32(gated);
+        let _tres = crate::prof::Timer::start();
         for (h, p) in hidden.iter_mut().zip(&projected) {
             *h += p;
         }
+        _tres.stop(&crate::prof::DEC_RESID_NS);
     }
     let normalized = normalize(&hidden, rows, 640, &model.decoder_norms[42]);
-    let mut block = vec![0.0f32; rows * 128];
+    let _pth = crate::prof::Timer::start();
+    crate::prof::add(&crate::prof::HEAD_MACS, (rows as u64) * 32768 * 640);
+    let mut block = crate::scratch::take_f32(rows * 128);
+    block.clear();
+    block.resize(rows * 128, 0.0);
     match head {
         Head::Logits(logits) => {
             for column in (0..32768).step_by(128) {
@@ -411,9 +593,11 @@ fn run_decoder(
             }
         }
     }
+    _pth.stop(&crate::prof::HEAD_NS);
     if let Dest::Cache(cache) = dest {
         cache.count = total;
     }
+    _pt.stop(&crate::prof::DEC_NS);
     Ok(())
 }
 

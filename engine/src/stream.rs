@@ -134,6 +134,7 @@ impl Sequence {
                 } else {
                     1
                 };
+                let _ptf = crate::prof::Timer::start();
                 let count = frontend::frontend(
                     model,
                     &audio[self.processed..self.processed + blocks * 1280],
@@ -141,6 +142,7 @@ impl Sequence {
                     &mut output,
                     8,
                 )?;
+                _ptf.stop(&crate::prof::FRONTEND_NS);
                 if count != blocks * 4 {
                     return Err("frontend block shape".into());
                 }
@@ -168,12 +170,14 @@ impl Sequence {
                 };
                 let encoded =
                     encoder::encoder(model, &self.features[start * 768..total * 768], total - start)?;
+                let _pta = crate::prof::Timer::start();
                 let added = encoder::adapter(
                     model,
                     &encoded[(self.emitted - start) * 768..(stable - start) * 768],
                     stable - self.emitted,
                     self.emitted,
                 )?;
+                _pta.stop(&crate::prof::ADAPTER_NS);
                 self.memory.extend_from_slice(&added);
                 self.emitted = stable;
                 self.cross_valid = false;
@@ -183,7 +187,9 @@ impl Sequence {
             return Ok(());
         }
         if !self.cross_valid {
+            let _ptx = crate::prof::Timer::start();
             let (k, v) = encoder::cross(model, &self.memory, self.memory.len() / 640)?;
+            _ptx.stop(&crate::prof::CROSS_NS);
             self.cross_keys = k;
             self.cross_values = v;
             self.cross_valid = true;
@@ -520,7 +526,9 @@ impl Stream {
             self.processed += 512;
             self.lookbehind.copy_within(512..8192, 0);
             self.lookbehind[8192 - 512..].copy_from_slice(&chunk);
+            let _ptv = crate::prof::Timer::start();
             let probability = vad::vad(&self.model, &chunk, &mut self.vad)?;
+            _ptv.stop(&crate::prof::VAD_NS);
             self.probabilities[self.probability_index] = probability;
             self.probability_index = (self.probability_index + 1) % 32;
             let mut total = 0.0f32;
@@ -704,6 +712,7 @@ pub extern "C" fn ts_create_memory(
 
 #[no_mangle]
 pub extern "C" fn ts_destroy(stream: *mut c_void) {
+    crate::prof::dump();
     if !stream.is_null() {
         unsafe {
             drop(Box::from_raw(stream as *mut Stream));

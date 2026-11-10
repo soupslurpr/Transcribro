@@ -96,6 +96,15 @@ pub struct Matrix {
     /// aarch64 SDOT tile layout of `weights` (see `pack_sdot`); built
     /// at load on aarch64 only, empty elsewhere.
     pub packed_sdot: Vec<i8>,
+    /// aarch64 SMMLA tile layout of `weights` (see `pack_mmla`);
+    /// built at load on aarch64 when the i8mm path can use it,
+    /// empty elsewhere.
+    pub packed_mmla: Vec<i8>,
+    /// aarch64 GEMV layout of `weights` (see `pack_gemv`):
+    /// column-group-major, so a single row's projection streams
+    /// each output column group's codes contiguously; built at
+    /// load on aarch64 only, empty elsewhere.
+    pub packed_gemv: Vec<i8>,
     pub sums: Vec<i32>,       // [n]
     pub scales: Vec<f32>,     // [n]
     pub zeros: Vec<i32>,      // [n], zero point - 128
@@ -114,11 +123,54 @@ impl Matrix {
 /// 16 bytes at a tile start are exactly the B operand `vdotq_s32`
 /// consumes: B[4l + t] = w[j0 + t][c0 + l] against an A operand whose
 /// every 4-byte group is [a[j0], a[j0+1], a[j0+2], a[j0+3]].
+/// GEMV layout: the same 16-byte chunks as `pack_sdot`
+/// (columns 4cg..4cg+4 at depths 4jb..4jb+4, lane = column,
+/// byte = depth) but stored column-group-major: chunk
+/// (cg, jb) sits at ((cg * (k/4)) + jb) * 16, so one output
+/// column group's whole depth is contiguous.
+pub fn pack_gemv(weights: &[i8], k: usize, n: usize) -> Vec<i8> {
+    let mut out = vec![0i8; k * n];
+    for j in 0..k {
+        for c in 0..n {
+            out[(((c / 4) * (k / 4) + (j / 4)) * 16) + (c % 4) * 4 + (j % 4)] =
+                weights[j * n + c];
+        }
+    }
+    out
+}
+
 pub fn pack_sdot(weights: &[i8], k: usize, n: usize) -> Vec<i8> {
     let mut out = vec![0i8; k * n];
     for j in 0..k {
         for c in 0..n {
             out[((j / 4) * (n / 4) + (c / 4)) * 16 + (c % 4) * 4 + (j % 4)] = weights[j * n + c];
+        }
+    }
+    out
+}
+
+/// Tile layout for the aarch64 SMMLA (i8mm) projection kernel:
+/// a pure rearrangement of the natural [k][n] weights (values are
+/// already the signed code-128 codes the accumulation consumes).
+/// For an 8-column block `cb` and an 8-deep k block `jb`, the four
+/// 16-byte chunks at `((cb * (k/8) + jb) * 4 + p) * 16` hold, for
+/// column pair `p`, first column `cb*8 + 2p`'s codes for
+/// k = jb*8..jb*8+8, then column `cb*8 + 2p + 1`'s — exactly the
+/// B operand `smmla` consumes against an A operand of two rows'
+/// matching 8-byte k runs.
+pub fn pack_mmla(weights: &[i8], k: usize, n: usize) -> Vec<i8> {
+    let mut out = vec![0i8; k * n];
+    for cb in 0..n / 8 {
+        for jb in 0..k / 8 {
+            for p in 0..4 {
+                let dst = ((cb * (k / 8) + jb) * 4 + p) * 16;
+                for half in 0..2 {
+                    let c = cb * 8 + p * 2 + half;
+                    for kk in 0..8 {
+                        out[dst + half * 8 + kk] = weights[(jb * 8 + kk) * n + c];
+                    }
+                }
+            }
         }
     }
     out
@@ -186,11 +238,41 @@ fn load_matrix(
             Vec::new()
         }
     };
+    let packed_mmla = {
+        #[cfg(target_arch = "aarch64")]
+        {
+            if k % 8 == 0 && n % 8 == 0 {
+                pack_mmla(weights.as_slice(), k, n)
+            } else {
+                Vec::new()
+            }
+        }
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            Vec::new()
+        }
+    };
+    let packed_gemv = {
+        #[cfg(target_arch = "aarch64")]
+        {
+            if k % 4 == 0 && n % 4 == 0 {
+                pack_gemv(weights.as_slice(), k, n)
+            } else {
+                Vec::new()
+            }
+        }
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            Vec::new()
+        }
+    };
     Ok(Matrix {
         k,
         n,
         weights,
         packed_sdot,
+        packed_mmla,
+        packed_gemv,
         sums,
         scales,
         zeros: zero_u8.iter().map(|&z| z as i32 - 128).collect(),
@@ -230,7 +312,16 @@ pub struct Model {
 /// dequantization at use -- no 84 MB FP32 expansion on device.
 pub enum HeadStore {
     Tiled(Vec<f32>),
-    Codes { codes: Vec<u8>, scale: f32, zero: i32 },
+    Codes {
+        codes: Vec<u8>,
+        scale: f32,
+        zero: i32,
+        /// FP32 dequantized head in the same 128-column tile
+        /// layout as `Tiled`, for multi-row (bulk) calls, which
+        /// run as an FP32 GEMM like the C++ oracle's bulk head.
+        /// Empty when unavailable.
+        tiled: Vec<f32>,
+    },
 }
 
 /// medium.cpp `embedding_code`: the raw uint8 affine code of (token,
@@ -410,13 +501,16 @@ impl Model {
             // CompactHead form: natural-order uint8 codes, dequantized
             // at use (decoder::head_block).
             let mut codes = vec![0u8; 32768 * 640];
+            let mut tiled = vec![0.0f32; 32768 * 640];
             for v in 0..32768usize {
                 for j in 0..640usize {
-                    codes[v * 640 + j] =
-                        embedding_code(&embedding_codes, embedding_packed, v, j);
+                    let code = embedding_code(&embedding_codes, embedding_packed, v, j);
+                    codes[v * 640 + j] = code;
+                    tiled[(v & !127) * 640 + j * 128 + (v & 127)] =
+                        (code as i32 - embedding_zero) as f32 * embedding_scale;
                 }
             }
-            HeadStore::Codes { codes, scale: embedding_scale, zero: embedding_zero }
+            HeadStore::Codes { codes, scale: embedding_scale, zero: embedding_zero, tiled }
         } else {
             // x86 head: the FP32 embedding matrix materialized in
             // 128-vocab-column tiles, offset(v, j) = (v & !127) * 640 +
