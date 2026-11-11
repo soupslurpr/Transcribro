@@ -182,15 +182,6 @@ fn sources_mode(ctx: &Ctx, output: &Path) -> Result<String, String> {
     fs::create_dir(&prepared).map_err(|e| e.to_string())?;
     for (name, archive) in &archives {
         let includes: Option<Vec<&str>> = match name.as_str() {
-            "mlas" => Some(vec![
-                "LICENSE",
-                "ThirdPartyNotices.txt",
-                "cmake",
-                "include",
-                "onnxruntime/core/mlas",
-                "onnxruntime/core/common",
-                "onnxruntime/core/platform",
-            ]),
             "moonshine" => Some(vec!["LICENSE", "core/silero-vad-model-data.h", "core/moonshine-c-api.h"]),
             _ => None,
         };
@@ -344,6 +335,13 @@ fn model_mode(ctx: &Ctx, output: &Path, sources_dir: &Path) -> Result<String, St
     let destination = output.join("models/standalone");
     fs::create_dir_all(&destination).map_err(|e| e.to_string())?;
     for record in files {
+        // Gate 7: the compressed v1 asset is no longer published. The
+        // runtime memory-maps the uncompressed archive (proven on
+        // device at Gate 6), so the .zst remains only in the verified
+        // artifacts cache, where its pinned hash is the Gate 1 proof.
+        if record["file"].as_str() == Some("medium.trm.zst") {
+            continue;
+        }
         fs::copy(
             artifacts.join(record["file"].as_str().unwrap()),
             destination.join(record["file"].as_str().unwrap()),
@@ -352,10 +350,9 @@ fn model_mode(ctx: &Ctx, output: &Path, sources_dir: &Path) -> Result<String, St
     }
     fs::copy(ctx.speech.join("medium-model.json"), destination.join("model.json"))
         .map_err(|e| e.to_string())?;
-    // Gate 6: also publish the TRMED002 (format v2) archive next to the
-    // compressed v1 asset. The Android runtime memory-maps this
-    // uncompressed file and borrows its weights zero-copy; the .zst
-    // remains as the fallback asset. Conversion is value-verified
+    // Gate 6: also publish the TRMED002 (format v2) archive. The
+    // Android runtime memory-maps this uncompressed file and borrows
+    // its weights zero-copy. Conversion is value-verified
     // against the v1 archive by construction (see convert_v2.rs and
     // the verify_trmed002 tool).
     crate::convert_v2::run_convert_v2(

@@ -12,10 +12,10 @@ Requirements:
 
 - JDK 21 and the Gradle wrapper.
 - Android SDK platform 37.1, NDK 30.0.16248370, and SDK CMake 3.22.1.
-- Linux x86_64, Python 3.11 with `venv`, and a host C/C++ compiler and CMake
-  for the pinned model converter and Zstandard compressor.
-- No separate native source checkouts are needed; Gradle prepares whisper.cpp
-  and the other pinned native sources automatically.
+- Linux x86_64, a Rust toolchain (cargo), and a host C/C++ compiler and CMake
+  for the pinned Zstandard compressor the model converter builds.
+- No separate native source checkouts are needed; Gradle prepares the
+  pinned Moonshine and Zstandard sources automatically.
 - Network access for the first build's declared Gradle dependencies and
   checksum-locked native/model/converter inputs.
 
@@ -26,11 +26,11 @@ Requirements:
 Set `ANDROID_HOME` or `sdk.dir` in local.properties to the installed SDK.
 All variants use the original Medium weights and the same native engine for
 `arm64-v8a` and `x86_64`. No runtime-selection or model-directory properties
-are needed. `speech/native-inputs.lock.json` pins native downloads, converter
-wheels including transitive dependencies, the flatbuffer schema, inner VAD,
-converter identity, and exact output hashes. Conversion installs only those
-verified wheels into a private Python 3.11 environment; it never runs pip or
-resolves an unlocked package. Its current host support is Linux x86_64.
+are needed. `speech/native-inputs.lock.json` pins the two native downloads, the VAD
+header provenance, the converter inputs, and the exact archive hashes. Conversion
+runs in the Rust prepare tool in `tools/`; it verifies every pinned input by
+size and SHA-256 and never resolves an unlocked package. Its current host
+support is Linux x86_64.
 
 Persistent inputs and reproducible intermediates live under
 `.gradle/native-inputs/`, outside all `build/` outputs. Keep that directory
@@ -41,8 +41,9 @@ and the normal Gradle dependency cache for offline reconstruction:
 ./gradlew :app:assembleStaging --offline
 ```
 
-`:speech:prepareNativeSources` extracts pinned numerical sources into
-`speech/build/generated/native/`. `:speech:prepareMediumModel` verifies the
+`:speech:prepareNativeSources` extracts the pinned Moonshine and
+Zstandard sources into `speech/build/generated/native/`.
+`:speech:prepareMediumModel` verifies the
 eight originals in `docs/moonshine-model.json`, imports their unchanged values
 with the pinned inner Silero, and compresses the packed-head archive using
 Zstandard 1.5.7, level 9, one worker. Both run automatically through declared
@@ -55,12 +56,13 @@ input cache requires reacquisition. No model is published externally.
 and its compressed representation to
 `de2e9fd91654e889909c8420069ac24a60a5b088771e93e3204d8fb7b7e38184`.
 The APK stores model assets, native libraries and DEX without ZIP compression.
-At runtime the model decompresses directly into aligned RAM; the app creates
-no extracted model files and downloads nothing.
+At runtime the engine memory-maps the uncompressed model archive from the
+APK and pages tensors in on demand; the app creates no extracted model files
+and downloads nothing.
 
 Use the Gradle wrapper. The Android interface is Kotlin and Jetpack Compose;
 the isolated Kotlin worker owns session coordination, pause detection, and
-its bounded audio queue. The small JNI bridge in `speech/` owns native model
+its bounded audio queue. The small JNI bridge in the Rust engine (`engine/`) owns native model
 contexts. Do not introduce
 a second decoder or model runtime without reviewing its provenance, license,
 maintenance, memory use, and on-device behavior.
@@ -159,9 +161,10 @@ while lint is inspecting them.
 
 Keep local screenshots, build logs, detailed results, and candidate APKs out
 of commits. Use temporary directories for test outputs and an external data
-directory for downloaded benchmark inputs. Keep native correctness tools under
-`verification/standalone-runtime/`; they compile the production sources from
-`speech/src/main/cpp/medium/`. Reference ORT/Moonshine libraries are used only
-by explicit comparison tools, not by any app variant. The component tests
-must compare float bits against a reference on the same architecture;
-stream checks must include every scheduled preview and final update.
+directory for downloaded benchmark inputs. The C++/Python component-verification harness that lived under
+`verification/standalone-runtime/` was removed at Gate 7 of the Kotlin+Rust
+rewrite, once the Rust engine had reached transcript parity with it; the C++
+engine sources that were its reference oracle followed at the same gate,
+once the speed program closed. The component tests must compare float bits
+against a reference on the same architecture; stream checks must include
+every scheduled preview and final update.

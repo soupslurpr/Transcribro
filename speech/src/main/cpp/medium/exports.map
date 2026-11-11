@@ -1,4 +1,0 @@
-{
-  global: tm_*; ts_*;
-  local: *;
-};
