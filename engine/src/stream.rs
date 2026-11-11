@@ -179,6 +179,8 @@ impl Sequence {
                 )?;
                 _pta.stop(&crate::prof::ADAPTER_NS);
                 self.memory.extend_from_slice(&added);
+                crate::scratch::put_f32(encoded);
+                crate::scratch::put_f32(added);
                 self.emitted = stable;
                 self.cross_valid = false;
             }
@@ -190,6 +192,8 @@ impl Sequence {
             let _ptx = crate::prof::Timer::start();
             let (k, v) = encoder::cross(model, &self.memory, self.memory.len() / 640)?;
             _ptx.stop(&crate::prof::CROSS_NS);
+            crate::scratch::put_f32(std::mem::take(&mut self.cross_keys));
+            crate::scratch::put_f32(std::mem::take(&mut self.cross_values));
             self.cross_keys = k;
             self.cross_values = v;
             self.cross_valid = true;
@@ -463,6 +467,7 @@ impl Stream {
     }
 
     pub(crate) fn push(&mut self, audio: &[f32]) -> Result<(), String> {
+        let _t_ingest = crate::prof::Timer::start();
         if self.finished || self.failed {
             return Err("stream is not accepting audio".into());
         }
@@ -476,21 +481,26 @@ impl Stream {
             }
         }
         self.pending.extend_from_slice(audio);
+        _t_ingest.stop(&crate::prof::INGEST_NS);
         Ok(())
     }
 
     pub(crate) fn update(&mut self, final_: bool, previews: bool) -> Result<(), String> {
         let _big_cores = crate::affinity::big_cores();
+        let _t_stream = crate::prof::Timer::start();
+        crate::prof::add(&crate::prof::STREAM_CALLS, 1);
         if self.finished || self.failed {
             return Err("stream is finished or failed".into());
         }
-        match self.update_impl(final_, previews) {
+        let result = match self.update_impl(final_, previews) {
             Ok(()) => Ok(()),
             Err(message) => {
                 self.failed = true;
                 Err(message)
             }
-        }
+        };
+        _t_stream.stop(&crate::prof::STREAM_NS);
+        result
     }
 
     pub(crate) fn segment_count(&self) -> usize {

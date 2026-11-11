@@ -62,6 +62,25 @@ impl_pool!(I8_POOL, take_i8, put_i8, i8);
 /// projection outputs: both the fused SMMLA kernel and the
 /// epilogue write every element). Avoids the memset + fresh-page
 /// cost of `vec![0.0; n]` on the 22k-call projection path.
+/// Allocate a Vec of `n` f32 WITHOUT zeroing, sourced from the
+/// recycling pool: the caller must return it with `put_f32` when
+/// done (a dropped buffer simply falls out of the pool; correctness
+/// never depends on the return). Same write-before-read contract
+/// as `alloc_uninit_f32`. Large fresh allocations on the projection
+/// path land on the allocator's mmap slow path and fault their
+/// pages back in on the kernel's stores (Phase 2 A-2 measurement:
+/// ~35-40% of the fused projection rate at in-app shapes); pooled
+/// buffers keep the pages resident.
+pub fn alloc_pooled_f32(n: usize) -> Vec<f32> {
+    let mut v = take_f32(n);
+    // SAFETY: take_f32 guarantees capacity >= n (smallest sufficient
+    // pooled buffer, or a fresh Vec::with_capacity(n)).
+    unsafe {
+        v.set_len(n);
+    }
+    v
+}
+
 pub fn alloc_uninit_f32(n: usize) -> Vec<f32> {
     let mut v = Vec::with_capacity(n);
     // SAFETY: capacity is n; every element is written before

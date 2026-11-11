@@ -300,8 +300,10 @@ fn stream_impl<'a>(
     }
     let mut samples = vec![0.0f32; count as usize];
     if count > 0 {
-        env.get_float_array_region(input, 0, &mut samples)
-            .map_err(|_| "region".to_string())?;
+        let _t_ingest = crate::prof::Timer::start();
+        let copied = env.get_float_array_region(input, 0, &mut samples);
+        _t_ingest.stop(&crate::prof::INGEST_NS);
+        copied.map_err(|_| "region".to_string())?;
     }
     let mut state = value.state.lock().unwrap();
     if count > 0 {
@@ -422,7 +424,8 @@ pub extern "system" fn Java_dev_soupslurpr_transcribro_speech_NativeEngine_nativ
     finish_phrase: jboolean,
     defer_analysis: jboolean,
 ) -> JObjectArray<'caller> {
-    unowned
+    let _t_jni = crate::prof::Timer::start();
+    let result = unowned
         .with_env(|env| -> Result<JObjectArray<'_>, jni::errors::Error> {
             let texts = match stream_impl(
                 env,
@@ -437,7 +440,10 @@ pub extern "system" fn Java_dev_soupslurpr_transcribro_speech_NativeEngine_nativ
                     Vec::new()
                 }
             };
-            match strings(env, &texts) {
+            let _t_marshal = crate::prof::Timer::start();
+            let converted = strings(env, &texts);
+            _t_marshal.stop(&crate::prof::MARSHAL_NS);
+            match converted {
                 Ok(array) => Ok(array),
                 Err(_) => {
                     fail(env, "On-device recognition failed");
@@ -445,7 +451,9 @@ pub extern "system" fn Java_dev_soupslurpr_transcribro_speech_NativeEngine_nativ
                 }
             }
         })
-        .resolve::<jni::errors::ThrowRuntimeExAndDefault>()
+        .resolve::<jni::errors::ThrowRuntimeExAndDefault>();
+    _t_jni.stop(&crate::prof::JNI_NS);
+    result
 }
 
 #[no_mangle]
@@ -489,6 +497,7 @@ pub extern "system" fn Java_dev_soupslurpr_transcribro_speech_NativeEngine_nativ
     _class: JClass<'caller>,
     handle: jlong,
 ) {
+    crate::prof::dump();
     if handle != 0 {
         unsafe {
             drop(Box::from_raw(handle as *mut Engine));

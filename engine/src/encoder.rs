@@ -605,7 +605,7 @@ unsafe fn project_block_mmla(
 /// with zeros (their outputs are never stored). Values are copied
 /// verbatim — the accumulation products are unchanged.
 #[cfg(target_arch = "aarch64")]
-fn tile_activations(q: &Quantized, rows: usize, k: usize, out: &mut Vec<i8>) {
+pub(crate) fn tile_activations(q: &Quantized, rows: usize, k: usize, out: &mut Vec<i8>) {
     let padded = rows.div_ceil(8) * 8;
     out.clear();
     out.resize(padded * k, 0);
@@ -710,11 +710,31 @@ unsafe fn project_block_mmla_tiled(
 /// memory. Bit-identical to accumulate-then-epilogue.
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "i8mm")]
-unsafe fn project_block_mmla_fused(
+pub(crate) unsafe fn project_block_mmla_fused(
     m: &Matrix,
     q: &Quantized,
     tiled: &[i8],
     rows: usize,
+    out: &mut [f32],
+) {
+    unsafe { project_block_mmla_fused_off(m, q, tiled, rows, 0, out) }
+}
+
+/// Row-offset form of the fused kernel: `tiled` and `out` are a
+/// row chunk's slices of a larger call whose first row is
+/// `cs_off` in the full activation block; the epilogue reads
+/// `q.centered_sums[cs_off + rr]`. Every other index is
+/// call-local. Index-only change — per-element accumulation
+/// order is untouched, so chunked results are bit-identical
+/// to the single call.
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "i8mm")]
+pub(crate) unsafe fn project_block_mmla_fused_off(
+    m: &Matrix,
+    q: &Quantized,
+    tiled: &[i8],
+    rows: usize,
+    cs_off: usize,
     out: &mut [f32],
 ) {
     use std::arch::aarch64::*;
@@ -753,9 +773,9 @@ unsafe fn project_block_mmla_fused(
                     if rr >= rows {
                         break;
                     }
-                    let cs0 = q.centered_sums[rr];
+                    let cs0 = q.centered_sums[cs_off + rr];
                     let cs1 = if rr + 1 < rows {
-                        q.centered_sums[rr + 1]
+                        q.centered_sums[cs_off + rr + 1]
                     } else {
                         0
                     };
@@ -1193,6 +1213,16 @@ fn proj_bucket(t0: std::time::Instant, rows: usize, macs: u64, site: u8) {
     }
 }
 
+/// Round 6 lever (c) kill switch: TS_PROJ_THREADS != "0"
+/// enables the pooled-regime row-split of the fused projection
+/// path. Default OFF until its in-app gate passes.
+fn proj_threads_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var("TS_PROJ_THREADS").map(|v| v != "0").unwrap_or(false)
+    })
+}
+
 pub fn project_s(m: &Matrix, q: &Quantized, rows: usize, site: u8) -> Vec<f32> {
     let (k, n) = (m.k, m.n);
     let _bucket_t0 = std::time::Instant::now();
@@ -1219,17 +1249,87 @@ pub fn project_s(m: &Matrix, q: &Quantized, rows: usize, site: u8) -> Vec<f32> {
         if rows >= 2 && m.packed_mmla.len() == m.k * m.n && m.k % 8 == 0 && m.n % 8 == 0 && have_i8mm()
         {
             // Fused SMMLA path: no accumulator round-trip.
-            let mut out = crate::scratch::alloc_uninit_f32(rows * n);
+            let mut out = crate::scratch::alloc_pooled_f32(rows * n);
             let _ptf = crate::prof::Timer::start();
+            if proj_threads_enabled() && rows >= 96 {
+                // Round 6 lever (c): row-split over the persistent
+                // pool in the pooled regime — tiling done once into
+                // a shared buffer, outputs pooled, no per-call
+                // spawns. Bit-exact by construction (fused_off).
+                let mut tiled: Vec<i8> = Vec::new();
+                let _tile_t0 = std::time::Instant::now();
+                tile_activations(q, rows, m.k, &mut tiled);
+                if crate::prof::enabled() {
+                    let _tns = _tile_t0.elapsed().as_nanos() as u64;
+                    crate::prof::add(&crate::prof::TILE_NS, _tns);
+                    crate::prof::add(
+                        match site {
+                            1 => &crate::prof::TILE_S1_NS,
+                            2 => &crate::prof::TILE_S2_NS,
+                            _ => &crate::prof::TILE_S0_NS,
+                        },
+                        _tns,
+                    );
+                    crate::prof::add(&crate::prof::TILE_CALLS, 1);
+                }
+                let parts = (rows / 32).clamp(1, 4);
+                if parts <= 1 {
+                    unsafe { project_block_mmla_fused(m, q, &tiled, rows, &mut out) };
+                } else {
+                    let chunk = (rows / parts).div_ceil(8) * 8;
+                    let starts: Vec<(usize, usize)> = (0..parts)
+                        .map(|i| {
+                            let s = (i * chunk).min(rows);
+                            (s, chunk.min(rows - s))
+                        })
+                        .filter(|&(_, t)| t > 0)
+                        .collect();
+                    let tiled_ptr = tiled.as_ptr() as usize;
+                    let out_ptr = out.as_mut_ptr() as usize;
+                    crate::pool::pool().run(starts.len(), &|i| {
+                        let (s, t) = starts[i];
+                        let tpart = unsafe {
+                            std::slice::from_raw_parts(
+                                (tiled_ptr as *const i8).add(s * k),
+                                t * k,
+                            )
+                        };
+                        let opart = unsafe {
+                            std::slice::from_raw_parts_mut(
+                                (out_ptr as *mut f32).add(s * n),
+                                t * n,
+                            )
+                        };
+                        unsafe {
+                            project_block_mmla_fused_off(m, q, tpart, t, s, opart)
+                        };
+                    });
+                }
+            } else {
             TILE_BUF.with(|buf| {
                 let mut buf = buf.borrow_mut();
+                let _tile_t0 = std::time::Instant::now();
                 tile_activations(q, rows, m.k, &mut buf);
+                if crate::prof::enabled() {
+                    let _tns = _tile_t0.elapsed().as_nanos() as u64;
+                    crate::prof::add(&crate::prof::TILE_NS, _tns);
+                    crate::prof::add(
+                        match site {
+                            1 => &crate::prof::TILE_S1_NS,
+                            2 => &crate::prof::TILE_S2_NS,
+                            _ => &crate::prof::TILE_S0_NS,
+                        },
+                        _tns,
+                    );
+                    crate::prof::add(&crate::prof::TILE_CALLS, 1);
+                }
                 let tiled: &[i8] =
                     unsafe { std::slice::from_raw_parts(buf.as_ptr(), buf.len()) };
                 unsafe {
                     project_block_mmla_fused(m, q, tiled, rows, &mut out);
                 }
             });
+            }
             _ptf.stop(&crate::prof::PROJ_ACC_NS);
             proj_bucket(_bucket_t0, rows, (rows as u64) * (k as u64) * (n as u64), site);
             return out;
@@ -1269,7 +1369,7 @@ pub fn project_s(m: &Matrix, q: &Quantized, rows: usize, site: u8) -> Vec<f32> {
     }
     _pt.stop(&crate::prof::PROJ_ACC_NS);
     let _pte = crate::prof::Timer::start();
-    let mut out = crate::scratch::alloc_uninit_f32(rows * n);
+    let mut out = crate::scratch::alloc_pooled_f32(rows * n);
     epilogue(m, q, &acc, rows, &mut out);
     _pte.stop(&crate::prof::PROJ_EPI_NS);
     crate::scratch::put_i32(acc);
@@ -1773,12 +1873,16 @@ pub fn encoder(model: &Model, input: &[f32], rows: usize) -> Result<Vec<f32>, St
             let attended = attention(&heads(&qs, rows), &heads(&ks, rows), &heads(&vs, rows), rows, rows, mask);
             unheads(&attended, rows)
         };
+        crate::scratch::put_f32(qs);
+        crate::scratch::put_f32(ks);
+        crate::scratch::put_f32(vs);
         let projected = run(&model.encoder_matrices[layer * 6 + 3], &joined, rows, 640)?;
         let _tere = crate::prof::Timer::start();
         for (h, p) in hidden.iter_mut().zip(&projected) {
             *h += p;
         }
         _tere.stop(&crate::prof::ENC_RESID_NS);
+        crate::scratch::put_f32(projected);
         let mut expanded = run_normalized(
             &model.encoder_matrices[layer * 6 + 4],
             &hidden,
@@ -1790,11 +1894,13 @@ pub fn encoder(model: &Model, input: &[f32], rows: usize) -> Result<Vec<f32>, St
         kernels::gelu_erf_inplace(&mut expanded);
         _tege.stop(&crate::prof::ENC_GELU_NS);
         let projected = run(&model.encoder_matrices[layer * 6 + 5], &expanded, rows, 3072)?;
+        crate::scratch::put_f32(expanded);
         let _tere = crate::prof::Timer::start();
         for (h, p) in hidden.iter_mut().zip(&projected) {
             *h += p;
         }
         _tere.stop(&crate::prof::ENC_RESID_NS);
+        crate::scratch::put_f32(projected);
     }
     _pt.stop(&crate::prof::ENC_NS);
     Ok(normalize(&hidden, rows, 768, &model.encoder_norms[28]))
@@ -1817,8 +1923,10 @@ pub fn adapter(model: &Model, input: &[f32], rows: usize, offset: usize) -> Resu
 /// K and V from the shared quantized block, stored head-major per layer.
 pub fn cross(model: &Model, input: &[f32], rows: usize) -> Result<(Vec<f32>, Vec<f32>), String> {
     let q = quantize(input, rows, 640)?;
-    let mut keys = vec![0.0f32; 14 * rows * 640];
-    let mut values = vec![0.0f32; 14 * rows * 640];
+    // Pooled (write-before-read contract holds: scatter_heads
+    // writes every element of each layer slice below).
+    let mut keys = crate::scratch::alloc_pooled_f32(14 * rows * 640);
+    let mut values = crate::scratch::alloc_pooled_f32(14 * rows * 640);
     for layer in 0..14 {
         let k = project_s(&model.cross_matrices[layer * 2], &q, rows, 2);
         let v = project_s(&model.cross_matrices[layer * 2 + 1], &q, rows, 2);
@@ -1826,6 +1934,8 @@ pub fn cross(model: &Model, input: &[f32], rows: usize) -> Result<(Vec<f32>, Vec
         // (values identical to heads()+copy; one pass, no temp).
         scatter_heads(&k, rows, &mut keys[layer * rows * 640..(layer + 1) * rows * 640]);
         scatter_heads(&v, rows, &mut values[layer * rows * 640..(layer + 1) * rows * 640]);
+        crate::scratch::put_f32(k);
+        crate::scratch::put_f32(v);
     }
     Ok((keys, values))
 }

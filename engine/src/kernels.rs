@@ -254,6 +254,102 @@ fn softmax_row_neon(row: &mut [f32]) {
 /// is the same ascending-k FMA chain from the bias init as the
 /// wide kernel's tails, so results are bit-identical.
 #[cfg(target_arch = "aarch64")]
+/// NEON twin of the scalar narrow GEMM for M == 4: one vector
+/// per row of the 8-row tile, lanes = the 4 output columns.
+/// Bit-identical to the scalar body (per-lane FMA chain).
+#[cfg(target_arch = "aarch64")]
+unsafe fn gemm_small4_neon(
+    a: &[f32],
+    t0: usize,
+    t1: usize,
+    k: usize,
+    b: &[f32],
+    c: &mut [f32],
+    bias: Option<&[f32]>,
+) {
+    use std::arch::aarch64::*;
+    let init_of = |t: usize| bias.map(|bb| bb[t]).unwrap_or(0.0);
+    let mut t = t0;
+    while t + 8 <= t1 {
+        let mut acc = [vdupq_n_f32(0.0); 8];
+        for i in 0..8 {
+            acc[i] = vdupq_n_f32(init_of(t + i));
+        }
+        let ap = a.as_ptr();
+        let bp = b.as_ptr();
+        for kk in 0..k {
+            let bv = unsafe { vld1q_f32(bp.add(kk * 4)) };
+            for i in 0..8 {
+                let av = unsafe { *ap.add((t + i) * k + kk) };
+                acc[i] = unsafe { vfmaq_n_f32(acc[i], bv, av) };
+            }
+        }
+        for i in 0..8 {
+            unsafe {
+                vst1q_f32(c.as_mut_ptr().add((t + i - t0) * 4), acc[i]);
+            }
+        }
+        t += 8;
+    }
+    while t < t1 {
+        for j in 0..4 {
+            let mut total = init_of(t);
+            for kk in 0..k {
+                total = a[t * k + kk].mul_add(b[kk * 4 + j], total);
+            }
+            c[(t - t0) * 4 + j] = total;
+        }
+        t += 1;
+    }
+}
+
+/// NEON twin for M == 2 (64-bit vectors, lanes = 2 columns).
+#[cfg(target_arch = "aarch64")]
+unsafe fn gemm_small2_neon(
+    a: &[f32],
+    t0: usize,
+    t1: usize,
+    k: usize,
+    b: &[f32],
+    c: &mut [f32],
+    bias: Option<&[f32]>,
+) {
+    use std::arch::aarch64::*;
+    let init_of = |t: usize| bias.map(|bb| bb[t]).unwrap_or(0.0);
+    let mut t = t0;
+    while t + 8 <= t1 {
+        let mut acc = [vdup_n_f32(0.0); 8];
+        for i in 0..8 {
+            acc[i] = vdup_n_f32(init_of(t + i));
+        }
+        let ap = a.as_ptr();
+        let bp = b.as_ptr();
+        for kk in 0..k {
+            let bv = unsafe { vld1_f32(bp.add(kk * 2)) };
+            for i in 0..8 {
+                let av = unsafe { *ap.add((t + i) * k + kk) };
+                acc[i] = unsafe { vfma_n_f32(acc[i], bv, av) };
+            }
+        }
+        for i in 0..8 {
+            unsafe {
+                vst1_f32(c.as_mut_ptr().add((t + i - t0) * 2), acc[i]);
+            }
+        }
+        t += 8;
+    }
+    while t < t1 {
+        for j in 0..2 {
+            let mut total = init_of(t);
+            for kk in 0..k {
+                total = a[t * k + kk].mul_add(b[kk * 2 + j], total);
+            }
+            c[(t - t0) * 2 + j] = total;
+        }
+        t += 1;
+    }
+}
+
 fn gemm_small<const M: usize>(
     a: &[f32],
     t0: usize,
@@ -263,6 +359,21 @@ fn gemm_small<const M: usize>(
     c: &mut [f32],
     bias: Option<&[f32]>,
 ) {
+    #[cfg(target_arch = "aarch64")]
+    {
+        // SAFETY: aarch64 NEON is baseline on this target; the
+        // kernels stay within the slices' bounds by the same
+        // index arithmetic as the scalar body below.
+        match M {
+            4 => return unsafe { gemm_small4_neon(a, t0, t1, k, b, c, bias) },
+            2 => return unsafe { gemm_small2_neon(a, t0, t1, k, b, c, bias) },
+            // M == 1 stays scalar: the row-gather NEON form
+            // measured SLOWER than the scalar 8-chain body on
+            // the VAD shapes (4.9/9.6 us scalar vs 8.3/16.1 us
+            // gathered, Pixel 8a, Phase 2 B bench).
+            _ => {}
+        }
+    }
     let init_of = |t: usize| bias.map(|bb| bb[t]).unwrap_or(0.0);
     let mut t = t0;
     while t + 8 <= t1 {

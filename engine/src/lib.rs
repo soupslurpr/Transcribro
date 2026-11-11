@@ -11,6 +11,8 @@ mod frontend;
 mod jni_bridge;
 mod kernels;
 pub mod layout;
+#[cfg(feature = "proj-bench")]
+pub mod proj_bench;
 mod model;
 mod outer_vad;
 mod pool;

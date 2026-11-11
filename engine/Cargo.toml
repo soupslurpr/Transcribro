@@ -7,6 +7,14 @@ edition = "2021"
 name = "transcribro_standalone"
 crate-type = ["cdylib", "rlib"]
 
+[features]
+proj-bench = []
+
+[[bin]]
+name = "proj_bench"
+path = "src/bin/proj_bench.rs"
+required-features = ["proj-bench"]
+
 [dependencies]
 memmap2 = "0.9"
 ruzstd = { version = "0.8", features = ["std"] }

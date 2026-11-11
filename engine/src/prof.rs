@@ -29,6 +29,15 @@ pub static PROJ_BIG_MACS: AtomicU64 = AtomicU64::new(0);
 pub static PROJ_S0_NS: AtomicU64 = AtomicU64::new(0);
 pub static PROJ_S1_NS: AtomicU64 = AtomicU64::new(0);
 pub static PROJ_S2_NS: AtomicU64 = AtomicU64::new(0);
+pub static TILE_NS: AtomicU64 = AtomicU64::new(0);
+pub static TILE_S0_NS: AtomicU64 = AtomicU64::new(0);
+pub static TILE_S1_NS: AtomicU64 = AtomicU64::new(0);
+pub static TILE_S2_NS: AtomicU64 = AtomicU64::new(0);
+pub static TILE_CALLS: AtomicU64 = AtomicU64::new(0);
+pub static VAD_STFT_NS: AtomicU64 = AtomicU64::new(0);
+pub static VAD_CONVS_NS: AtomicU64 = AtomicU64::new(0);
+pub static VAD_RNN_NS: AtomicU64 = AtomicU64::new(0);
+pub static VAD_MISC_NS: AtomicU64 = AtomicU64::new(0);
 pub static ENC_SHUF_NS: AtomicU64 = AtomicU64::new(0);
 pub static ENC_GELU_NS: AtomicU64 = AtomicU64::new(0);
 pub static ENC_RESID_NS: AtomicU64 = AtomicU64::new(0);
@@ -46,10 +55,17 @@ pub static DEC_GATE_NS: AtomicU64 = AtomicU64::new(0);
 pub static DEC_RESID_NS: AtomicU64 = AtomicU64::new(0);
 pub static HEAD_MACS: AtomicU64 = AtomicU64::new(0);
 pub static NORM_NS: AtomicU64 = AtomicU64::new(0);
+pub static STREAM_NS: AtomicU64 = AtomicU64::new(0);
+pub static STREAM_CALLS: AtomicU64 = AtomicU64::new(0);
+pub static INGEST_NS: AtomicU64 = AtomicU64::new(0);
+pub static JNI_NS: AtomicU64 = AtomicU64::new(0);
+pub static MARSHAL_NS: AtomicU64 = AtomicU64::new(0);
 
 pub fn enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("TS_SPEED_PROFILE").is_some())
+    *ON.get_or_init(|| {
+        option_env!("TS_BENCH_PROF").is_some() || std::env::var_os("TS_SPEED_PROFILE").is_some()
+    })
 }
 
 pub fn add(c: &AtomicU64, v: u64) {
@@ -82,11 +98,19 @@ pub fn dump() {
         return;
     }
     static ONCE: AtomicBool = AtomicBool::new(false);
-    if ONCE.swap(true, Ordering::SeqCst) {
+    if option_env!("TS_BENCH_PROF").is_none() && ONCE.swap(true, Ordering::SeqCst) {
         return;
     }
     let g = |c: &AtomicU64| c.load(Ordering::Relaxed);
     let ms = |c: &AtomicU64| g(c) as f64 / 1.0e6;
+    eprintln!(
+        "PROF stream={:.1} (calls={}) ingest={:.1} jni={:.1} marshal={:.1}",
+        ms(&STREAM_NS),
+        g(&STREAM_CALLS),
+        ms(&INGEST_NS),
+        ms(&JNI_NS),
+        ms(&MARSHAL_NS),
+    );
     let proj_macs = g(&PROJ_MACS_ENC) + g(&PROJ_MACS_DEC) + g(&PROJ_MACS_X);
     let acc_s = g(&PROJ_ACC_NS) as f64 / 1.0e9;
     eprintln!(
@@ -144,4 +168,65 @@ pub fn dump() {
         ms(&DEC_RESID_NS),
         g(&HEAD_MACS),
     );
+    #[cfg(ts_bench_prof)]
+    {
+        // Bench builds only: mirror the headline buckets to logcat,
+        // where the in-app gate can read them (stderr routing inside
+        // an app process is not guaranteed). Never compiled into
+        // normal builds.
+        extern "C" {
+            fn __android_log_print(prio: i32, tag: *const u8, fmt: *const u8, ...) -> i32;
+        }
+        let sec = |c: &AtomicU64| g(c) as f64 / 1.0e9;
+        let line = format!(
+            "fe={:.4} vad={:.4} enc={:.4} ad={:.4} cr={:.4} dec={:.4} norm={:.4} quant={:.4} proj_acc={:.4} proj_epi={:.4} proj_r1={:.4} proj_big={:.4} attn_enc={:.4} attn_self={:.4} attn_cross={:.4} head={:.4} egelu={:.4} stream={:.4} ingest={:.4} jni={:.4} marshal={:.4} enc_calls={} dec_calls={} dec_r1={} bulk_tok={} tile={:.4} tile0={:.4} tile1={:.4} tile2={:.4} tile_calls={} macs_big={} macs_enc={} macs_x={} macs_dec={} s0={:.4} s1={:.4} s2={:.4} enc_rows={} vad_s={:.4} vad_c={:.4} vad_r={:.4} vad_m={:.4}",
+            sec(&FRONTEND_NS),
+            sec(&VAD_NS),
+            sec(&ENC_NS),
+            sec(&ADAPTER_NS),
+            sec(&CROSS_NS),
+            sec(&DEC_NS),
+            sec(&NORM_NS),
+            sec(&QUANT_NS),
+            sec(&PROJ_ACC_NS),
+            sec(&PROJ_EPI_NS),
+            sec(&PROJ_R1_NS),
+            sec(&PROJ_BIG_NS),
+            sec(&ATTN_ENC_NS),
+            sec(&ATTN_DEC_SELF_NS),
+            sec(&ATTN_DEC_CROSS_NS),
+            sec(&HEAD_NS),
+            sec(&ENC_GELU_NS),
+            sec(&STREAM_NS),
+            sec(&INGEST_NS),
+            sec(&JNI_NS),
+            sec(&MARSHAL_NS),
+            g(&ENC_CALLS),
+            g(&DEC_CALLS),
+            g(&DEC_R1_CALLS),
+            g(&DEC_BULK_TOKENS),
+            sec(&TILE_NS),
+            sec(&TILE_S0_NS),
+            sec(&TILE_S1_NS),
+            sec(&TILE_S2_NS),
+            g(&TILE_CALLS),
+            g(&PROJ_BIG_MACS),
+            g(&PROJ_MACS_ENC),
+            g(&PROJ_MACS_X),
+            g(&PROJ_MACS_DEC),
+            sec(&PROJ_S0_NS),
+            sec(&PROJ_S1_NS),
+            sec(&PROJ_S2_NS),
+            g(&ENC_ROWS),
+            sec(&VAD_STFT_NS),
+            sec(&VAD_CONVS_NS),
+            sec(&VAD_RNN_NS),
+            sec(&VAD_MISC_NS),
+        );
+        if let Ok(text) = std::ffi::CString::new(line) {
+            unsafe {
+                __android_log_print(4, b"TSPROF\0".as_ptr(), b"%s\0".as_ptr(), text.as_ptr());
+            }
+        }
+    }
 }

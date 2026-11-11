@@ -597,6 +597,10 @@ fn run_decoder(
         let mut qheads = heads(&qs, rows);
         let mut kheads = heads(&ks, rows);
         let vheads = heads(&vs, rows);
+        crate::scratch::put_f32(qs);
+        crate::scratch::put_f32(ks);
+        crate::scratch::put_f32(vs);
+        crate::scratch::put_f32(normalized);
         _tshuf.stop(&crate::prof::DEC_SHUF_NS);
         for h in 0..10 {
             for r in 0..rows {
@@ -658,11 +662,14 @@ fn run_decoder(
             *h += p;
         }
         _tres.stop(&crate::prof::DEC_RESID_NS);
+        crate::scratch::put_f32(projected);
         // Cross-attention over this layer's slice of the cross-KV.
         let normalized = normalize(&hidden, rows, 640, &model.decoder_norms[layer * 3 + 1]);
         let qs = run_s(&model.decoder_matrices[layer * 8 + 4], &normalized, rows, 640, 1)?;
         let _tshuf3 = crate::prof::Timer::start();
         let qheads = heads(&qs, rows);
+        crate::scratch::put_f32(qs);
+        crate::scratch::put_f32(normalized);
         _tshuf3.stop(&crate::prof::DEC_SHUF_NS);
         let cross_base = layer * frames * 640;
         let attended = attention(
@@ -684,6 +691,7 @@ fn run_decoder(
             *h += p;
         }
         _tres.stop(&crate::prof::DEC_RESID_NS);
+        crate::scratch::put_f32(projected);
         // SwiGLU FFN: logistic on the second half, gated by the first.
         let normalized = normalize(&hidden, rows, 640, &model.decoder_norms[layer * 3 + 2]);
         let expanded = run_s(&model.decoder_matrices[layer * 8 + 6], &normalized, rows, 640, 1)?;
@@ -713,11 +721,14 @@ fn run_decoder(
         }
         let projected = run_s(&model.decoder_matrices[layer * 8 + 7], &gated, rows, width, 1)?;
         crate::scratch::put_f32(gated);
+        crate::scratch::put_f32(expanded);
+        crate::scratch::put_f32(normalized);
         let _tres = crate::prof::Timer::start();
         for (h, p) in hidden.iter_mut().zip(&projected) {
             *h += p;
         }
         _tres.stop(&crate::prof::DEC_RESID_NS);
+        crate::scratch::put_f32(projected);
     }
     let normalized = normalize(&hidden, rows, 640, &model.decoder_norms[42]);
     if probe_file().is_some() {
