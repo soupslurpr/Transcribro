@@ -886,9 +886,13 @@ preserved in full below and in the listed license files.
 - `speech/tools/import_model.py`: adapted model representation; converts the
   eight exact original files from `docs/moonshine-model.json` and the inner
   Silero from `core/silero-vad-model-data.h` into a reversible tensor archive.
-- `speech/build/generated/native/moonshine/core/moonshine-c-api.h` and
-  `speech/build/generated/native/moonshine/core/silero-vad-model-data.h`:
-  copied unchanged; build/verification inputs, excluded from app compilation.
+- `tools/assets/silero-vad.ort`: the inner Silero VAD model, extracted
+  byte-for-byte from the `silero_vad_onnx` array in
+  `core/silero-vad-model-data.h` of the pinned Moonshine tree above and
+  vendored in-tree (2026-11-10); build input to the model converter,
+  excluded from app compilation. Provenance and hashes are recorded in
+  `tools/assets/PROVENANCE.md` and in the `vad` section of
+  `speech/native-inputs.lock.json`.
 - `speech/build/generated/medium-assets/models/standalone/medium.trm.zst`:
   adapted; reversible integer packing and lossless Zstandard compression of
   the original Medium and embedded inner Silero values. The same bytes are

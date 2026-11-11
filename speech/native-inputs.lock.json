@@ -22,13 +22,6 @@
     "speech/medium-model.json": "b81be304c26c2595017e4c0749c31bcf09d4bc978bd88948157c8d751474234d"
   },
   "native": {
-    "moonshine": {
-      "bytes": 176944864,
-      "filename": "234f60faa0eb388b01cdf7e60aca232af37aefda",
-      "revision": "234f60faa0eb388b01cdf7e60aca232af37aefda",
-      "sha256": "6bd927a48234dced3cc6f208522fe176c248686e9283273c51eddc8d7994e001",
-      "url": "https://codeload.github.com/moonshine-ai/moonshine/tar.gz/234f60faa0eb388b01cdf7e60aca232af37aefda"
-    },
     "zstd": {
       "bytes": 2451884,
       "filename": "v1.5.7",
@@ -42,8 +35,17 @@
     "sha256": "2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987"
   },
   "vad": {
-    "header_sha256": "df9af551f0c4a4afffed0c64fae265122fa55fcd8247df0f64cc37a0c8551884",
-    "inner_sha256": "a620103ef77fbdae23c7798b9271506a48a883997e55f851d2884551e0947437",
-    "path": "core/silero-vad-model-data.h"
+    "asset": "tools/assets/silero-vad.ort",
+    "asset_sha256": "a620103ef77fbdae23c7798b9271506a48a883997e55f851d2884551e0947437",
+    "provenance": {
+      "extracted": "2026-11-10",
+      "extraction": "The silero_vad_onnx C byte array parsed out of the header text (every 0xNN literal in order, the scan the converter previously applied at conversion time) and stored raw; the extracted bytes hash to asset_sha256, the value convert.rs asserts as its compiled-in VAD_SHA256.",
+      "model": "Silero VAD: silero_vad.onnx converted to the ONNX Runtime .ort flatbuffer format (optimization level: disable) by Moonshine's scripts/generate-silero-vad-data.py",
+      "source_file": "core/silero-vad-model-data.h",
+      "source_file_sha256": "df9af551f0c4a4afffed0c64fae265122fa55fcd8247df0f64cc37a0c8551884",
+      "source_repository": "moonshine-ai/moonshine",
+      "source_revision": "234f60faa0eb388b01cdf7e60aca232af37aefda",
+      "source_tarball_sha256": "6bd927a48234dced3cc6f208522fe176c248686e9283273c51eddc8d7994e001"
+    }
   }
 }

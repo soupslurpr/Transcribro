@@ -141,25 +141,3 @@ pub fn load_source(data: &[u8], expected_sha256: &str, branch: Option<&str>) -> 
     };
     read_graph(g)
 }
-
-/// Extract the byte array from a C header of `0xNN` literals — the same
-/// `re.findall(r"0x([0-9a-fA-F]{2})", text)` scan import_model.py applies to
-/// the Silero VAD model header.
-pub fn extract_hex_bytes(text: &str) -> Vec<u8> {
-    let b = text.as_bytes();
-    let mut out = Vec::new();
-    let mut i = 0;
-    while i + 4 <= b.len() {
-        if b[i] == b'0'
-            && b[i + 1] == b'x'
-            && (b[i + 2] as char).is_ascii_hexdigit()
-            && (b[i + 3] as char).is_ascii_hexdigit()
-        {
-            out.push(u8::from_str_radix(&text[i + 2..i + 4], 16).unwrap());
-            i += 4;
-        } else {
-            i += 1;
-        }
-    }
-    out
-}

@@ -181,15 +181,7 @@ fn sources_mode(ctx: &Ctx, output: &Path) -> Result<String, String> {
     let prepared = temp.path().join("sources");
     fs::create_dir(&prepared).map_err(|e| e.to_string())?;
     for (name, archive) in &archives {
-        let includes: Option<Vec<&str>> = match name.as_str() {
-            "moonshine" => Some(vec!["LICENSE", "core/silero-vad-model-data.h", "core/moonshine-c-api.h"]),
-            _ => None,
-        };
-        unpack(archive, &prepared.join(name), includes.as_deref())?;
-    }
-    let header = prepared.join("moonshine/core/silero-vad-model-data.h");
-    if sha256_of(&header)? != ctx.lock["vad"]["header_sha256"].as_str().unwrap_or("") {
-        return Err("Pinned inner VAD source changed".to_string());
+        unpack(archive, &prepared.join(name), None)?;
     }
     let inputs = pyjson::dumps_sorted_indent2(&ctx.lock["native"]) + "\n";
     fs::write(prepared.join("inputs.json"), inputs).map_err(|e| e.to_string())?;
@@ -236,6 +228,10 @@ fn model_mode(ctx: &Ctx, output: &Path, sources_dir: &Path) -> Result<String, St
     let outer = &ctx.lock["outer_vad"];
     if sha256_of(&ctx.root.join(outer["path"].as_str().unwrap()))? != outer["sha256"].as_str().unwrap_or("") {
         return Err("Pinned outer Silero model changed".to_string());
+    }
+    let vad_model = ctx.root.join(ctx.lock["vad"]["asset"].as_str().unwrap());
+    if sha256_of(&vad_model)? != ctx.lock["vad"]["asset_sha256"].as_str().unwrap_or("") {
+        return Err("Pinned inner Silero VAD asset changed".to_string());
     }
     for (name, expected) in ctx.lock["converter_inputs"].as_object().ok_or("lock.converter_inputs")? {
         if sha256_of(&ctx.root.join(name))? != expected.as_str().unwrap_or("") {
@@ -294,7 +290,7 @@ fn model_mode(ctx: &Ctx, output: &Path, sources_dir: &Path) -> Result<String, St
             &ConvertArgs {
                 models: originals_dir.clone(),
                 output: archive.clone(),
-                vad_header: sources_dir.join("moonshine/core/silero-vad-model-data.h"),
+                vad_model: vad_model.clone(),
                 packed_head: true,
             },
         )?;

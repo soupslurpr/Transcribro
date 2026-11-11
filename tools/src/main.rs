@@ -4,11 +4,11 @@
 //! Subcommands mirror the Python CLIs:
 //!   transcribro-prepare sources --cache DIR --output DIR [--offline]
 //!   transcribro-prepare model   --cache DIR --output DIR --sources DIR [--offline]
-//!   transcribro-prepare convert --models DIR --output FILE --vad-header FILE [--packed-head]
+//!   transcribro-prepare convert --models DIR --output FILE --vad-model FILE [--packed-head]
 //!   transcribro-prepare convert-v2 [--input] IN.trm [--output] OUT.trm2
 //!                                 (TRMED001 -> TRMED002, Gate 6 S1; a separate
 //!                                 verify_trmed002 binary checks the result)
-//!   transcribro-prepare dump    --models DIR --vad-header FILE   (dev aid:
+//!   transcribro-prepare dump    --models DIR --vad-model FILE   (dev aid:
 //!                                 per-initializer/node JSON for oracle diffs)
 //!
 //! Download transport shells out to curl: it is the transport already proven
@@ -81,7 +81,7 @@ fn dispatch(args: &[String]) -> Result<String, String> {
             let a = convert::ConvertArgs {
                 models: PathBuf::from(flag(rest, "--models").ok_or("--models required")?),
                 output: PathBuf::from(flag(rest, "--output").ok_or("--output required")?),
-                vad_header: PathBuf::from(flag(rest, "--vad-header").ok_or("--vad-header required")?),
+                vad_model: PathBuf::from(flag(rest, "--vad-model").ok_or("--vad-model required")?),
                 packed_head: rest.iter().any(|a| a == "--packed-head"),
             };
             let root = resolve_root(flag(rest, "--root"))?;
@@ -183,9 +183,8 @@ fn dump(args: &[String]) -> Result<String, String> {
             dump_source(&src),
         );
     }
-    if let Some(h) = flag(args, "--vad-header") {
-        let text = std::fs::read_to_string(h).map_err(|e| e.to_string())?;
-        let data = ort::extract_hex_bytes(&text);
+    if let Some(h) = flag(args, "--vad-model") {
+        let data = std::fs::read(h).map_err(|e| e.to_string())?;
         let src = ort::load_source(
             &data,
             "a620103ef77fbdae23c7798b9271506a48a883997e55f851d2884551e0947437",

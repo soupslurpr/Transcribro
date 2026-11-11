@@ -48,6 +48,7 @@ val prepareMediumModel = tasks.register<Exec>("prepareMediumModel") {
         rootProject.layout.projectDirectory.file(
             "app/src/main/assets/models/silero_vad/ggml-silero-v6.2.0.bin",
         ),
+        rootProject.layout.projectDirectory.file("tools/assets/silero-vad.ort"),
     )
     outputs.dir(mediumAssets)
     commandLine(

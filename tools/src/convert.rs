@@ -3,7 +3,7 @@
 //! integer-exact or a byte copy; every assertion in the Python original has a
 //! counterpart here (as a panic, like Python's AssertionError).
 
-use crate::ort::{extract_hex_bytes, load_source, Source, TensorVal};
+use crate::ort::{load_source, Source, TensorVal};
 use crate::pyjson;
 use crate::util::sha256_hex;
 use serde_json::{json, Map, Value};
@@ -12,8 +12,9 @@ use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-/// SHA-256 of the extracted inner Silero VAD model, asserted in
-/// import_model.py (and pinned as vad.inner_sha256 in the lock).
+/// SHA-256 of the inner Silero VAD model (the vendored
+/// tools/assets/silero-vad.ort), asserted in import_model.py and
+/// pinned as vad.asset_sha256 in the lock.
 const VAD_SHA256: &str = "a620103ef77fbdae23c7798b9271506a48a883997e55f851d2884551e0947437";
 
 /// Generic N-d byte permutation: out has dims `axes.map(|a| dims[a])` and
@@ -227,7 +228,7 @@ fn transpose_equal_u8(a: &TensorVal, b: &TensorVal) -> bool {
 pub struct ConvertArgs {
     pub models: PathBuf,
     pub output: PathBuf,
-    pub vad_header: PathBuf,
+    pub vad_model: PathBuf,
     pub packed_head: bool,
 }
 
@@ -252,8 +253,7 @@ pub fn run_convert(root: &Path, args: &ConvertArgs) -> Result<String, String> {
         let key = file.strip_suffix(".ort").unwrap().to_string();
         sources.insert(key, load_source(&data, f["sha256"].as_str().unwrap(), None));
     }
-    let header_text = std::fs::read_to_string(&args.vad_header).map_err(|e| e.to_string())?;
-    let vad_data = extract_hex_bytes(&header_text);
+    let vad_data = std::fs::read(&args.vad_model).map_err(|e| e.to_string())?;
     sources.insert(
         "silero-16k".to_string(),
         load_source(&vad_data, VAD_SHA256, Some("then_branch")),
