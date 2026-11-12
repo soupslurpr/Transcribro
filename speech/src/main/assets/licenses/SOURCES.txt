@@ -1,37 +1,27 @@
 Recognition sources
 
-Transcribro original-Medium native runtime: speech/src/main/cpp/medium/.
+Transcribro Medium recognition runs in the pure-Rust engine in engine/.
 Original model values and tokenizer:
 https://download.moonshine.ai/model/medium-streaming-en/quantized_26_08_21
-The exact eight source-file hashes are in docs/moonshine-model.json; packaged
-model.json pins the reversible archive and lossless compressed representation.
+The exact eight source-file hashes are in docs/moonshine-model.json; the
+packaged model.json pins the reversible archive and its compressed
+representation. The shipped archive is the uncompressed medium.trm; the
+app memory-maps it in place and extracts nothing.
 Model, stream/tokenizer policy and embedded inner Silero source:
 https://github.com/moonshine-ai/moonshine/tree/234f60faa0eb388b01cdf7e60aca232af37aefda
 See Moonshine-LICENSE.txt and Moonshine-MODIFICATIONS.txt.
 
-Microsoft ONNX Runtime MLAS numerical kernels (MIT):
-https://github.com/microsoft/onnxruntime/tree/a83fc4d58cb48eb68890dd689f94f28288cf2278/onnxruntime/core/mlas
-See MLAS-LICENSE.txt and MLAS-NOTICES.txt. The generated platform.cpp omits
-two unused 4-bit dispatch assignments. The generated CMake source-grouping
-block uses an equivalent function for CMake 3.22 compatibility. Other kernel
-sources retain upstream code and headers. CPU instruction paths dispatch at
-runtime; the app has no ONNX graph/session runtime.
-
-Eigen headers (MPL 2.0):
-https://github.com/eigen-mirror/eigen/tree/1d8b82b0740839c0de7f1242a3585e3390ff5f33
-Unmodified source is available at that exact revision and is downloaded by
-the build. Its per-file copyright notices remain in the source headers.
-See Eigen-MPL2.txt. EIGEN_MPL2_ONLY excludes secondary-license-only headers.
-
-Zstandard 1.5.7 (BSD-3-Clause):
-https://github.com/facebook/zstd/tree/v1.5.7
-Only the decompressor is linked into the app; see Zstandard-LICENSE.txt
-and Zstandard-NOTICES.txt for its xxHash per-file notices.
-
-Outer Silero VAD 6.2 and whisper.cpp/ggml:
+Outer Silero VAD 6.2: a pure-Rust port (engine/src/outer_vad.rs) of
+whisper.cpp's ggml Silero network:
 https://github.com/ggml-org/whisper.cpp/tree/927cfce34f31707e17f2bff35c349632fb9e2c3a
+The model container it reads:
 https://huggingface.co/ggml-org/whisper-vad/blob/9ffd54a1e1ee413ddf265af9913beaf518d1639b/ggml-silero-v6.2.0.bin
-See NOTICE.txt for the original Silero, ggml and YaRN notices.
+See NOTICE.txt for the original Silero and ggml notices.
+
+Zstandard 1.5.7 (BSD-3-Clause) is a build-time tool only; no Zstandard
+code is included in the app:
+https://github.com/facebook/zstd/tree/v1.5.7
+
 All build acquisitions and conversion inputs are pinned in
-speech/native-inputs.lock.json. Native libraries and DEX are stored in the APK;
-the app decompresses model data directly into RAM, without model extraction.
+speech/native-inputs.lock.json. Native libraries and DEX are stored
+uncompressed in the APK.

@@ -12,10 +12,12 @@ preview delivery, cancellation, manual boundaries and the final silent drain.
 
 The archive reversibly permutes integer matrices and the tied embedding
 without changing original weights, scales, zero points, biases or FP32 values.
-Zstandard compresses the archive losslessly. The pinned source's embedded
-16 kHz Silero values and original tokenizer are preserved. ARM64 executes a
-packed head; x86_64 expands the same original head values for MLAS execution.
-Baseline x86 projections also reconstruct original unsigned integer codes
-for the pinned MLAS dispatcher; their affine arithmetic is unchanged.
-No Moonshine runtime library or ONNX graph/session runtime is packaged.
-The app does include Microsoft ONNX Runtime MLAS numerical-kernel source.
+It ships uncompressed and is memory-mapped in place; a Zstandard-compressed
+representation exists only in the build cache. The pinned source's embedded
+16 kHz Silero values and original tokenizer are preserved. ARM64 reads the
+packed tied embedding and head directly; x86_64 reconstructs the same
+original FP32 head. Baseline x86 projections also reconstruct original
+unsigned integer codes for the engine's integer GEMM; their affine
+arithmetic is unchanged.
+No Moonshine runtime library or ONNX graph/session runtime is packaged;
+the runtime is a pure-Rust engine.
