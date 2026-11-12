@@ -51,7 +51,8 @@ text and undo history. **Copy or save a transcription to keep your words.**
 Only settings are stored automatically.
 
 Recognition uses the original Moonshine English Medium Streaming weights
-and Silero VAD through Transcribro's native runtime on ARM64 and x86_64.
+and Silero VAD through Transcribro's own engine (Kotlin plus a pure-Rust
+inference core, with no ONNX Runtime) on ARM64 and x86_64.
 The bundled archive is lossless; native libraries and DEX are uncompressed.
 Every recognition session runs native inference in its own isolated process.
 Selected files are decoded using Android's media services and streamed to the
@@ -71,7 +72,7 @@ code units. See [the architecture notes](docs/architecture.md) for resource boun
 
 ## Try the candidate
 
-With JDK 21, Python 3.11, CMake, and the Android SDK installed
+With JDK 21, a Rust toolchain, CMake, and the Android SDK installed
 (see [build requirements](CONTRIBUTING.md#build)):
 
 ```sh
@@ -79,8 +80,8 @@ With JDK 21, Python 3.11, CMake, and the Android SDK installed
 adb -s DEVICE_SERIAL install -r app/build/outputs/apk/staging/app-staging.apk
 ```
 
-The first build downloads checksum-pinned native sources, converter wheels,
-and original model files, then prepares the exact bundled archive. Cached
+The first build downloads the checksum-pinned Zstandard source and the
+original model files, then prepares the exact bundled archive. Cached
 inputs support `--offline` rebuilds after cleaning. Debug, staging, and release
 use the same engine and both ABIs. The installed app works offline.
 

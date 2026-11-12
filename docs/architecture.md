@@ -30,26 +30,28 @@ and queue; JNI owns the native contexts. Interactive recognition uses
 
 ## Native recognition
 
-All app variants use `speech/src/main/cpp/engine.cpp` and the original-Medium
-runtime in `speech/src/main/cpp/medium/`, on ARM64 and x86_64. It implements
+All app variants use the Rust engine crate in `engine/` (JNI bridge:
+`engine/src/jni_bridge.rs`), on ARM64 and x86_64. It implements
 the frontend, encoder, adapter, cross-attention, decoder, inner Silero VAD,
 segmentation and tokenizer. There is one app engine and one model precision.
 
 The archive reversibly packs the exact original integer weights and retains
 all FP32 values, scales, zero points and biases. The tokenizer is unchanged.
-JNI decompresses its bundled Zstandard frame into aligned RAM and lends the
-allocation to the model until destruction. It creates no extracted model
-files. ARM64 reads the packed tied embedding/head directly; x86_64 reconstructs
-the same original FP32 head. Baseline x86 projections reconstruct original
-unsigned codes for MLAS integer GEMM; CPUs supporting the selected VNNI path
-keep its direct packed projection kernel.
+The archive ships uncompressed (`medium.trm`) in a noCompress asset slot and
+is memory-mapped in place by the JNI bridge; pages are faulted on demand and
+the page cache is shared across processes. It creates no extracted model
+files. The tied embedding/head runs as an int8 projection by default
+(`TS_HEAD_INT8`, default on; setting it to `0` restores the FP32 head).
 
-The runtime links Microsoft ONNX Runtime's standalone MLAS numerical kernels
-and Eigen MPL 2.0 headers. It contains no ONNX graph/session runtime or
-Moonshine runtime library. Arithmetic follows the reference on each
-architecture, including explicit normalization contraction rules. CPU kernels
-use runtime dispatch with a portable baseline, without host-specific tuning.
-The outer pause detector remains whisper.cpp/Silero 6.2 with one CPU thread.
+The engine is pure, self-contained Rust: it links no ONNX Runtime, MLAS or
+Eigen code, and no Moonshine runtime library. (The ORT-format reader lives in
+the host-side converter in `tools/`, not in the app.) Arithmetic follows the
+reference on each architecture, including explicit normalization contraction
+rules. Kernels are the engine's own, with NEON fast paths on ARM64 and
+portable forms elsewhere, without host-specific tuning.
+The outer pause detector is a pure-Rust port of whisper.cpp's ggml
+Silero 6.2 (`engine/src/outer_vad.rs`) reading the same ggml asset, with one
+CPU thread.
 
 Each model serializes component calls and owns its scratch storage. Each
 stream owns its detector, segments and persistent decoder cache. Separate
@@ -77,9 +79,11 @@ Android partial results are cumulative; a confirmed-length extra distinguishes
 stable text from previews. Final results contain completed text. File work
 and dictation with Live text disabled skip tentative decoding.
 
-Gradle automatically acquires and verifies pinned sources, converter wheels
-and original model files. `speech/native-inputs.lock.json` and
-`speech/medium-model.json` identify every conversion input and exact artifact.
+Gradle automatically acquires and verifies the pinned Zstandard source and
+the original model files; the inner Silero VAD is a vendored in-repo asset
+(`tools/assets/silero-vad.ort`), not a download.
+`speech/native-inputs.lock.json` and `speech/medium-model.json` identify
+every conversion input and exact artifact.
 See [CONTRIBUTING](../CONTRIBUTING.md#build) for requirements and offline caches.
 Native libraries and DEX are uncompressed; ELF segments align to 16 KiB.
 

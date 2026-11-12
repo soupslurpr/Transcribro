@@ -15,7 +15,7 @@ Requirements:
 - Linux x86_64, a Rust toolchain (cargo), and a host C/C++ compiler and CMake
   for the pinned Zstandard compressor the model converter builds.
 - No separate native source checkouts are needed; Gradle prepares the
-  pinned Moonshine and Zstandard sources automatically.
+  pinned Zstandard source automatically.
 - Network access for the first build's declared Gradle dependencies and
   checksum-locked native/model/converter inputs.
 
@@ -26,8 +26,9 @@ Requirements:
 Set `ANDROID_HOME` or `sdk.dir` in local.properties to the installed SDK.
 All variants use the original Medium weights and the same native engine for
 `arm64-v8a` and `x86_64`. No runtime-selection or model-directory properties
-are needed. `speech/native-inputs.lock.json` pins the two native downloads, the VAD
-header provenance, the converter inputs, and the exact archive hashes. Conversion
+are needed. `speech/native-inputs.lock.json` pins the one native download
+(the pinned Zstandard source), the vendored VAD asset and its provenance,
+the converter inputs, and the exact archive hashes. Conversion
 runs in the Rust prepare tool in `tools/`; it verifies every pinned input by
 size and SHA-256 and never resolves an unlocked package. Its current host
 support is Linux x86_64.
@@ -41,11 +42,13 @@ and the normal Gradle dependency cache for offline reconstruction:
 ./gradlew :app:assembleStaging --offline
 ```
 
-`:speech:prepareNativeSources` extracts the pinned Moonshine and
-Zstandard sources into `speech/build/generated/native/`.
+`:speech:prepareNativeSources` extracts the pinned Zstandard source
+into `speech/build/generated/native/` (which then holds exactly
+`inputs.json` and `zstd/`).
 `:speech:prepareMediumModel` verifies the
 eight originals in `docs/moonshine-model.json`, imports their unchanged values
-with the pinned inner Silero, and compresses the packed-head archive using
+with the vendored inner Silero asset (`tools/assets/silero-vad.ort`), and
+compresses the packed-head archive using
 Zstandard 1.5.7, level 9, one worker. Both run automatically through declared
 build dependencies; `--offline` also applies to nested acquisition. Deleting
 only `build/` outputs needs no further network access. Deleting the persistent
