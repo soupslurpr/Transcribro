@@ -358,6 +358,16 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
   [AndroidX Core 1.19.0](https://dl.google.com/dl/android/maven2/androidx/core/core/1.19.0/core-1.19.0.aar).
 - `speech/src/main/assets/licenses/SOURCES.txt`: original summary of the
   recognition sources and their pinned origins.
+- `speech/src/main/assets/licenses/Rust-Dependency-NOTICES.txt` and
+  `app/src/main/assets/licenses/Android-Dependency-NOTICES.txt`:
+  generated package-level notices for the shipped declared
+  dependencies - the Rust crates compiled into the engine library
+  (from `engine/Cargo.lock`, via cargo-about and the generator in
+  `tools/src/bin/gen-dependency-notices.rs`) and the Gradle modules
+  on the release runtime classpath (licenses as declared in their
+  POMs). Declared dependencies are not hand-recorded in this file;
+  regenerate the notices with the recipe in
+  `tools/notices/README.md` instead of editing them.
 
 ## Moonshine Medium model and streaming policy
 

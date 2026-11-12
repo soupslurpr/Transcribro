@@ -150,12 +150,9 @@ private fun licenseTitle(file: String): String =
         "SOURCES.txt" -> "Recognition sources and attribution"
         "Material-Symbols-NOTICE.txt" -> "Material Symbols"
         "Protobuf-LICENSE.txt" -> "Protocol Buffers"
-        "LLVM-NOTICE.txt" -> "LLVM runtime"
+        "Rust-Dependency-NOTICES.txt" -> "Rust library dependencies"
+        "Android-Dependency-NOTICES.txt" -> "Android library dependencies"
         "Moonshine-LICENSE.txt" -> "Moonshine"
         "Moonshine-MODIFICATIONS.txt" -> "Moonshine modifications"
-        "Eigen-MPL2.txt" -> "Eigen"
-        "MLAS-LICENSE.txt" -> "Microsoft MLAS"
-        "MLAS-NOTICES.txt" -> "MLAS contributors"
-        "Zstandard-LICENSE.txt" -> "Zstandard"
         else -> file.substringBeforeLast('.').replace('-', ' ').replace('_', ' ')
     }

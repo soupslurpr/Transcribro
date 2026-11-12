@@ -1,0 +1,7 @@
+# cargo-about configuration for the dependency-notices pipeline
+# (see tools/notices/README.md). The accepted set covers the whole
+# engine resolve graph, including host-only crates; the generated
+# notices record itself lists only the crates compiled into the
+# shipped library.
+accepted = ["MIT", "Apache-2.0", "Unlicense", "Unicode-3.0"]
+targets = ["aarch64-linux-android", "x86_64-linux-android"]

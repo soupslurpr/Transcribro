@@ -1,0 +1,17 @@
+// Inventory task for the dependency-notices generator: prints every
+// module component on the app release runtime classpath, one per line
+// as "COMPONENT group:artifact:version". Used with -I by the recipe in
+// tools/notices/README.md; not part of the build.
+allprojects { p ->
+    p.tasks.register("printReleaseRuntimeDeps") {
+        doLast {
+            def conf = p.configurations.findByName("releaseRuntimeClasspath")
+            if (conf != null) {
+                conf.incoming.resolutionResult.allComponents.findAll { it.id instanceof ModuleComponentIdentifier }.each { c ->
+                    def m = c.id
+                    println "COMPONENT " + m.group + ":" + m.module + ":" + m.version
+                }
+            }
+        }
+    }
+}
